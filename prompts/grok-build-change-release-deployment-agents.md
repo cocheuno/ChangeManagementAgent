@@ -185,6 +185,7 @@ Record each item in `docs/DISCOVERY.md` with: the question, how you checked it (
 ## 5. Architecture
 
 ### 5.1 Stack
+- **The developer machine runs Windows 11 with PowerShell.** Every command in the docs, gates and phase reports must work there. Write helper scripts in Python, not bash or Makefiles. Use `pathlib` for paths. Write text files as UTF-8.
 - Python 3.12, `uv`, `pyproject.toml`, and a committed lockfile.
 - `langgraph` with the SQLite checkpointer: workflow graphs, human-in-the-loop interrupts, and resuming after a pause.
 - `langchain-xai` (`ChatXAI`): Grok through the xAI API.
