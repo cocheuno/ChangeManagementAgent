@@ -125,9 +125,10 @@ These four rules come from the Karpathy-inspired `CLAUDE.md`. They govern **how 
 - **Instance guard:** the instance URL must match `^https://dev\d+\.service-now\.com$`. The client refuses to run against any other URL, so it can never touch a real instance.
 - **Hibernation:** a sleeping PDI returns an HTML page instead of JSON. The client detects any non-JSON response and fails with a clear "wake your PDI" message. It doesn't retry forever.
 - **Rebuildability:** `cm-agents seed` rebuilds everything on a fresh PDI.
-- **Two credential sets, both in `.env`:**
+- **Settings come from `.env` only:** `SN_INSTANCE_URL`, the two credential sets below, `XAI_API_KEY` and `XAI_MODEL`. The human creates `.env`. Load it at runtime, never print or log its values, and never copy them into code, tests, docs or commits. `.env.example` lists the names with placeholder values.
+- **Two credential sets:**
   - `SN_ADMIN_USER` / `SN_ADMIN_PASSWORD`: used only by `doctor`, `seed`, `teardown` and test helpers.
-  - `SN_AGENT_USER` / `SN_AGENT_PASSWORD`: the integration user `syn.svc.change_agents`, which `seed` creates with the **fewest roles Phase 0 shows are needed**. All agents run as this user.
+  - `SN_AGENT_USER` / `SN_AGENT_PASSWORD`: the integration user `syn.svc.change_agents`, which `seed` creates with the **fewest roles Phase 0 shows are needed**. The human chooses the password in `.env`, and `seed` sets it on the user it creates (verify how in Phase 0). All agents run as this user.
 - **Time:**
   - All logic runs in UTC. Read and write with `sysparm_display_value=false`, and set the integration user's time zone to UTC.
   - The company's local time zone, `America/New_York`, is used only for policy, such as maintenance windows and "Friday evening".
