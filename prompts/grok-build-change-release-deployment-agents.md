@@ -128,7 +128,7 @@ These four rules come from the Karpathy-inspired `CLAUDE.md`. They govern **how 
 - **Settings come from `.env` only:** `SN_INSTANCE_URL`, the two credential sets below, `XAI_API_KEY` and `XAI_MODEL`. The human creates `.env`. Load it at runtime, never print or log its values, and never copy them into code, tests, docs or commits. `.env.example` lists the names with placeholder values.
 - **Two credential sets:**
   - `SN_ADMIN_USER` / `SN_ADMIN_PASSWORD`: used only by `doctor`, `seed`, `teardown` and test helpers.
-  - `SN_AGENT_USER` / `SN_AGENT_PASSWORD`: the integration user `syn.svc.change_agents`, which `seed` creates with the **fewest roles Phase 0 shows are needed**. The human chooses the password in `.env`, and `seed` sets it on the user it creates (verify how in Phase 0). All agents run as this user.
+  - `SN_AGENT_USER` / `SN_AGENT_PASSWORD`: the integration user `syn.svc.change_agents`, which `seed` creates with the **fewest roles Phase 0 shows are needed**. The human chooses the password in `.env`, and `seed` sets it on the user it creates (verify how in Phase 0). Create it with **Web service access only** checked, so it can't sign in to the UI and still passes the basic authentication restriction (§4.3, item 13). All agents run as this user.
 - **Time:**
   - All logic runs in UTC. Read and write with `sysparm_display_value=false`, and set the integration user's time zone to UTC.
   - The company's local time zone, `America/New_York`, is used only for policy, such as maintenance windows and "Friday evening".
@@ -179,6 +179,7 @@ Record each item in `docs/DISCOVERY.md` with: the question, how you checked it (
     - If the plugin is absent, ask whether to activate it.
 11. The roles the integration user needs for each operation the agents perform.
 12. The time zone and date format the REST API uses for date/time fields.
+13. ServiceNow's basic authentication restriction. Read the `glide.authenticate.basic_auth.restriction.*` properties (exact names vary by release; list them with a `nameLIKEbasic` query) and record whether the restriction is off, tracking or enforcing. Under enforcement, basic auth works only for accounts that are **Web service access only**, present an MFA code, or hold the `snc_basic_auth_api_access` role. The human grants that role to `admin` for seeding. Create the integration user with **Web service access only** checked, and confirm its basic auth works.
 
 ---
 
@@ -542,7 +543,7 @@ Build: the project skeleton, `settings.py` (with the instance guard), the Servic
 **Gate:**
 - The unit tests pass: the guard rejects non-PDI URLs; an HTML hibernation page raises the specific error; the retry behavior is correct.
 - `cm-agents doctor` prints the instance build, the plugin status and the admin login result. If the agent user doesn't exist yet, it says "agent user missing: run seed".
-- `DISCOVERY.md` answers all 12 items in §4.3 with evidence.
+- `DISCOVERY.md` answers all 13 items in §4.3 with evidence.
 - A query for `SYN-PROBE` records returns 0.
 - **Stop here for the human to make the decisions Phase 0 raises.**
 
