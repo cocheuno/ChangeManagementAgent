@@ -131,7 +131,11 @@ Before replying to a phase report, check:
    ```
    The second command must print nothing.
 7. **The phase report is saved** in `docs/phase-reports/`.
-8. **Push** once you've accepted it: `git push`.
+8. **Push** once you've accepted it, then move `main` up to the accepted phase. Pushing `grok-build` to `main` succeeds only as a fast-forward, so it can't overwrite anything on `main`:
+   ```powershell
+   git push
+   git push origin grok-build:main
+   ```
 
 ## Reply template (same session)
 

@@ -299,6 +299,23 @@ git push
 ```
 - **Check the URL first.** The first command must print a URL ending in `ChangeManagementAgent.git`. If it doesn't, you're in another repository: stop, and `Set-Location` to the right folder.
 - **`--no-edit`** stops Git from opening a text editor for the merge message. On Windows that editor is often Vim.
+- **Do this only while Grok Build is stopped** between phases. Git refuses to merge over uncommitted changes, but waiting avoids the problem altogether.
+
+### D5. Branch roles
+| Branch | Role | Who writes to it |
+|---|---|---|
+| `main` | **Default branch.** Holds only accepted phases; this is what the student and other readers see | Fast-forwarded from `grok-build` after each accepted phase |
+| `grok-build` | Grok Build's working branch. Phases are committed here and pushed after review | Grok Build commits; you push |
+| `claude/kind-wozniak-yxtiaz` | Where the prompts and these docs are written | Merged into `grok-build` with D4 |
+
+After you accept each phase:
+```powershell
+git push
+git push origin grok-build:main
+```
+The second command succeeds only if `main` can fast-forward, so it never overwrites anything on `main`. If it's rejected, someone committed to `main` directly; stop and look before doing anything else.
+
+**Check the default branch once:** on GitHub, open **Settings → General → Default branch**. It must say `main`. If it doesn't, click the switch-branch icon, choose `main`, click **Update**, and confirm.
 
 ---
 
