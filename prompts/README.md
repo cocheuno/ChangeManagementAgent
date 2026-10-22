@@ -7,6 +7,7 @@ These are all the prompts used to build this project's agents with Grok Build. T
 | [`design-request.md`](design-request.md) | The original request that produced the master prompt, the decisions made before writing it, the corrections added during setup, and a ready-to-use Problem Management version of the request | When writing a new master prompt for a different ITSM practice |
 | [`grok-build-change-release-deployment-agents.md`](grok-build-change-release-deployment-agents.md) | The **master prompt** for Change Enablement, Release Management and Deployment Management | Given to Grok Build at the start (session message 1) and reread in every new session |
 | [`grok-build-session-messages.md`](grok-build-session-messages.md) | Every message sent to Grok Build, in order, with its reasons, plus a review checklist and reply and resume templates | During the build, at each phase boundary and after switching PCs |
+| [`problem-management-primer-prompt.md`](problem-management-primer-prompt.md) | A prompt that has an AI assistant write a student primer on Problem Management, agents and agentic workflow, and analytics | Before the student starts the Problem Management project |
 
 Related:
 - [`docs/setup/PDI_AND_WORKSTATION_SETUP.md`](../docs/setup/PDI_AND_WORKSTATION_SETUP.md): the exact PDI, xAI and Windows setup, including every error met and how it was fixed. Do this before sending any prompt.
