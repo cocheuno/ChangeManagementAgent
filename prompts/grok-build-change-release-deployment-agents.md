@@ -187,6 +187,7 @@ Record each item in `docs/DISCOVERY.md` with: the question, how you checked it (
 
 ### 5.1 Stack
 - **The developer machine runs Windows 11 with PowerShell.** Every command in the docs, gates and phase reports must work there. Write helper scripts in Python, not bash or Makefiles. Use `pathlib` for paths. Write text files as UTF-8.
+- **The repository may live in a OneDrive folder that several PCs use, one at a time.** Keep the virtual environment outside the repository: each PC sets `UV_PROJECT_ENVIRONMENT` (see `docs/setup/PDI_AND_WORKSTATION_SETUP.md`). Run every tool through `uv run`. Never hard-code absolute paths or Windows user names.
 - Python 3.12, `uv`, `pyproject.toml`, and a committed lockfile.
 - `langgraph` with the SQLite checkpointer: workflow graphs, human-in-the-loop interrupts, and resuming after a pause.
 - `langchain-xai` (`ChatXAI`): Grok through the xAI API.
@@ -446,7 +447,7 @@ pir_required_when: [unsuccessful, emergency, high_risk, caused_incident]
 These fields are optional except `requester`, `summary` and `description`: requester, summary, description, `cis`, justification, `implementation_plan`, `backout_plan`, `test_plan`, `deployment_method`, `deployment_strategy`, `proposed_start`, `proposed_end`, `incident`, `release`, `security_flag`.
 
 ### 7.3 CLI (the full interface)
-`doctor` · `seed [--seed N] [--dry-run]` · `teardown` · `change new --file F` · `release new --service S --version V --window START END` · `release run <version>` · `resume <thread> [--info F | --decision go|no-go --by NAME --reason TEXT]` · `status <thread>` · `scenario run <S01..S10|all>` · `report metrics --period P`
+`doctor` · `discover` (the repeatable Phase 0 probe; a utility, not an agent command) · `seed [--seed N] [--dry-run]` · `teardown` · `change new --file F` · `release new --service S --version V --window START END` · `release run <version>` · `resume <thread> [--info F | --decision go|no-go --by NAME --reason TEXT]` · `status <thread>` · `scenario run <S01..S10|all>` · `report metrics --period P`
 
 ### 7.4 Deployment simulator (plain code, seeded)
 - Keeps track of which version is deployed for each application CI and environment in `var/sim_state.json`.
