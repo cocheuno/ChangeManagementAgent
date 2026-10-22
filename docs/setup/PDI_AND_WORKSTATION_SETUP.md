@@ -249,11 +249,14 @@ Do this on the PC that holds the newest copy, which is the one where Grok Build 
 ### D4. Bring in updates to the prompts and docs
 These files are written on the `claude/kind-wozniak-yxtiaz` branch. To merge them into Grok Build's branch:
 ```powershell
+git remote get-url origin
 git checkout grok-build
 git fetch origin
-git merge origin/claude/kind-wozniak-yxtiaz
+git merge --no-edit origin/claude/kind-wozniak-yxtiaz
 git push
 ```
+- **Check the URL first.** The first command must print a URL ending in `ChangeManagementAgent.git`. If it doesn't, you're in another repository: stop, and `Set-Location` to the right folder.
+- **`--no-edit`** stops Git from opening a text editor for the merge message. On Windows that editor is often Vim.
 
 ---
 
@@ -428,6 +431,7 @@ After changing `.env`, rebuild `$headers`, `$basic` and `$snHeaders`. They keep 
 | 13 | File saved as `.env.txt` | Notepad added `.txt` | Create the file first with `New-Item` (F1). In Notepad's Save dialog, choose **All files** |
 | 14 | `running scripts is disabled on this system` | The execution policy | `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` |
 | 15 | The developer portal has no **Manage instance password** option | The portal layout changed, or the option is temporarily unavailable | Set the password inside the instance (B2) |
+| 16 | `pathspec 'grok-build' did not match`, or `'origin/claude/...' - not something we can merge`, while in another project's folder | The git commands ran in the wrong repository (this happened in a different OneDrive project) | Nothing to undo: those commands fail without changing anything, and `git fetch` only refreshes Git's reference copy of GitHub. Run `git remote get-url origin` before git commands. |
 
 ---
 
