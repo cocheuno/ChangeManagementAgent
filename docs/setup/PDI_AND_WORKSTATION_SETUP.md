@@ -32,7 +32,7 @@ These are the values this project actually used. Your own instance will differ.
 | Integration user | `syn.svc.change_agents`, created by `seed` in Phase 1 with **Web service access only** |
 | GitHub repository | `cocheuno/ChangeManagementAgent`. Branches: `main` (default), `grok-build` (Grok Build's work), `claude/kind-wozniak-yxtiaz` (where the prompts and these docs were written) |
 | Workstation | Windows 11, Python 3.12.6, uv 0.9.30 |
-| Repository location | `%OneDrive%\ITSCM451\ChangeManagementAgent`, shared by two PCs that are used one at a time |
+| Repository location | `%OneDrive%\Data\Whitewater\Fall 2026\ITSCM 451Z\ChangeManagementAgent`, shared by two PCs (`caronet` and `tcaro`) that are used one at a time. Cloned there from GitHub (D2, option B). |
 | Grok Build progress | Phase 0 done and accepted, committed as `e7b0c6a` on `grok-build`. Findings are in `docs/DISCOVERY.md` and `docs/ASSUMPTIONS.md` on that branch. |
 
 ---
@@ -159,9 +159,10 @@ Skip this step if the repository is not in OneDrive.
 
 **Default: set it per session.** This affects only this project. Run it every time you open a terminal for this project, before any `uv` command and before starting Grok Build from that terminal:
 ```powershell
-Set-Location "$env:OneDrive\ITSCM451\ChangeManagementAgent"
+Set-Location (Join-Path $env:OneDrive 'Data\Whitewater\Fall 2026\ITSCM 451Z\ChangeManagementAgent')
 $env:UV_PROJECT_ENVIRONMENT = Join-Path $env:LOCALAPPDATA 'venvs\ChangeManagementAgent'
 ```
+Change the quoted folder if your repository is elsewhere in OneDrive (D2).
 
 **Alternative: set it once per PC.** Use this only if **no other project** on the PC uses uv. Every uv project on that PC would share this one environment and overwrite each other's packages.
 ```powershell
@@ -195,50 +196,91 @@ Then, on GitHub: **Settings → General → Default branch**, click the switch-b
 `Add-Content` is used on purpose. In Windows PowerShell 5.1, `echo ".env" >> .gitignore` writes a UTF-16 file that Git misreads, so `.env` would not be ignored.
 
 ### D2. Put the repository in OneDrive (this project's setup)
-Do this on the PC that holds the newest copy, which is the one where Grok Build last ran.
+**Choose the OneDrive folder first.** This project uses `OneDrive\Data\Whitewater\Fall 2026\ITSCM 451Z\ChangeManagementAgent`. Set it in each new terminal, changing the quoted part if you use a different folder:
+```powershell
+$repo = Join-Path $env:OneDrive 'Data\Whitewater\Fall 2026\ITSCM 451Z\ChangeManagementAgent'
+$env:OneDrive
+$repo
+```
+**Expected:** `$env:OneDrive` prints your OneDrive folder; if it prints nothing, sign in to the OneDrive app. The path contains spaces, so always keep `"$repo"` in quotes.
 
+Then use **one** of the two options below, on **one** PC only. OneDrive copies the result to the other PC.
+
+#### Option A: move an existing local copy into OneDrive
+Use this when the local copy holds work that isn't on GitHub yet.
 1. Close Grok Build, VS Code, and every other terminal using the folder.
-2. Back up to GitHub and remove the per-PC virtual environment:
+2. Check that everything is pushed, then remove the per-PC virtual environment:
    ```powershell
-   Set-Location "$HOME\ITSCM451\ChangeManagementAgent"
+   $src = "$HOME\ITSCM451\ChangeManagementAgent"
+   Set-Location "$src"
+   git remote get-url origin
+   git fetch origin
    git status
    git push -u origin grok-build
    if (Test-Path .venv) { Remove-Item .venv -Recurse -Force }
    ```
-   **Expected:** `git status` shows `nothing to commit, working tree clean`, and the push succeeds. If `git status` lists changes, stop and decide what to do with them first.
+   **Expected:** the URL ends in `ChangeManagementAgent.git`; `git status` shows `nothing to commit, working tree clean`; the push succeeds or says `Everything up-to-date`. If `git status` lists changes, stop and decide what to do with them first.
 3. Move the folder:
    ```powershell
-   $env:OneDrive
-   New-Item -ItemType Directory -Force -Path "$env:OneDrive\ITSCM451" | Out-Null
    Set-Location $HOME
-   Move-Item -Path "$HOME\ITSCM451\ChangeManagementAgent" -Destination "$env:OneDrive\ITSCM451\ChangeManagementAgent"
-   Set-Location "$env:OneDrive\ITSCM451\ChangeManagementAgent"
+   New-Item -ItemType Directory -Force -Path (Split-Path "$repo") | Out-Null
+   Move-Item -Path "$src" -Destination "$repo"
+   Set-Location "$repo"
    git status
    ```
+   **Expected:** a clean tree on `grok-build`.
+
+#### Option B: clone straight into OneDrive (what this project did)
+Use this when everything is already on GitHub. The only thing to carry over is `.env`. This project did this on the `caronet` PC, whose old clone at `$HOME\ITSCM451\ChangeManagementAgent` had an out-of-date `.env`.
+1. Clone the working branch:
+   ```powershell
+   Test-Path "$repo"
+   git clone -b grok-build https://github.com/cocheuno/ChangeManagementAgent.git "$repo"
+   Set-Location "$repo"
+   git log --oneline -1
+   ```
+   **Expected:** `Test-Path` prints `False` (the folder must not exist yet), the clone succeeds, and the last line shows the latest `grok-build` commit.
+2. Bring in `.env`. If an old local clone has one, copy it and then correct it:
+   ```powershell
+   $old = "$HOME\ITSCM451\ChangeManagementAgent"
+   Test-Path "$old\.env"
+   Copy-Item "$old\.env" "$repo\.env"
+   notepad .env
+   ```
+   In Notepad, set `SN_ADMIN_PASSWORD` to the **current** admin password from B2, and check every line against F2: no quotes, no trailing `/`, all seven names. If there is no old `.env`, create one with F1 and F2 instead.
+3. Check it, then retire the old clone so nobody uses it by mistake:
+   ```powershell
+   git check-ignore .env
+   Rename-Item "$old" ChangeManagementAgent-old
+   ```
+   `git check-ignore` must print `.env`. Run the F5 checks.
+
+#### After either option
+1. In File Explorer, right-click the `ChangeManagementAgent` folder in OneDrive and choose **Always keep on this device**.
+2. Recreate the environment outside OneDrive and run the checks. Wake the PDI first.
+   ```powershell
+   Set-Location "$repo"
+   $env:UV_PROJECT_ENVIRONMENT = Join-Path $env:LOCALAPPDATA 'venvs\ChangeManagementAgent'
+   git status
+   uv sync
+   uv run pytest
+   uv run ruff check .
+   uv run cm-agents doctor
+   Test-Path .venv
+   ```
    **Expected:**
-   - `$env:OneDrive` prints your OneDrive folder. If it prints nothing, sign in to the OneDrive app first.
-   - After the move, `git status` shows a clean tree on `grok-build`.
-4. In File Explorer, right-click `OneDrive\ITSCM451\ChangeManagementAgent` and choose **Always keep on this device**.
-5. Wait until OneDrive shows the folder as up to date (a green check).
+   - `pytest` passes; Phase 0 had 51 tests;
+   - `ruff` reports no problems;
+   - `doctor` reports the admin login as OK; until Phase 1 it ends with `agent user missing: run seed`;
+   - `Test-Path .venv` prints `False`.
+3. Run the xAI test (G2).
+4. Wait for OneDrive's green check before switching PCs.
 
 **On the other PC:**
 1. Wait for OneDrive to finish syncing the folder, then choose **Always keep on this device** on it.
-2. Run:
-   ```powershell
-   Set-Location "$env:OneDrive\ITSCM451\ChangeManagementAgent"
-   git status
-   ```
-3. That PC may still have an old local clone at `$HOME\ITSCM451\ChangeManagementAgent`, with an old `.env` holding the old admin password. Rename it now. Delete it once the OneDrive copy works (Part G):
-   ```powershell
-   Rename-Item "$HOME\ITSCM451\ChangeManagementAgent" ChangeManagementAgent-old
-   ```
-4. Do Part C on that PC if it hasn't been done. Then, on **each** PC, recreate the environment and run the checks:
-   ```powershell
-   $env:UV_PROJECT_ENVIRONMENT = Join-Path $env:LOCALAPPDATA 'venvs\ChangeManagementAgent'
-   uv sync
-   uv run pytest
-   uv run cm-agents doctor
-   ```
+2. Do Part C if it hasn't been done on that PC.
+3. If that PC has an old local clone, rename it: `Rename-Item "$HOME\ITSCM451\ChangeManagementAgent" ChangeManagementAgent-old`. Don't move it; the OneDrive copy replaces it.
+4. Set `$repo` as above and run step 2 of "After either option". Each PC builds its own environment under its own `AppData\Local`.
 
 ### D3. Rules for OneDrive plus Git
 - **One PC at a time.** Before switching, close Grok Build and the terminals, and wait for OneDrive's green check. Two PCs writing to `.git` or to the SQLite checkpoint database at the same time can corrupt them.
@@ -432,6 +474,7 @@ After changing `.env`, rebuild `$headers`, `$basic` and `$snHeaders`. They keep 
 | 14 | `running scripts is disabled on this system` | The execution policy | `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` |
 | 15 | The developer portal has no **Manage instance password** option | The portal layout changed, or the option is temporarily unavailable | Set the password inside the instance (B2) |
 | 16 | `pathspec 'grok-build' did not match`, or `'origin/claude/...' - not something we can merge`, while in another project's folder | The git commands ran in the wrong repository (this happened in a different OneDrive project) | Nothing to undo: those commands fail without changing anything, and `git fetch` only refreshes Git's reference copy of GitHub. Run `git remote get-url origin` before git commands. |
+| 17 | `Set-Location : Cannot find path ...`, then `fatal: not a git repository` | `$src` was changed to the new OneDrive path, or this PC doesn't hold the copy you meant to move | `$src` is where the repository is **now**; only `$repo` is the new location. If the copy with the latest work is on the other PC and everything is pushed, use D2 option B on this PC instead |
 
 ---
 
