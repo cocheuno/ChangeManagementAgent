@@ -83,7 +83,7 @@ class ServiceNowClient:
         path: str,
         *,
         params: dict[str, str] | None = None,
-        json: dict[str, Any] | None = None,
+        json: dict[str, Any] | list[Any] | None = None,
     ) -> dict[str, Any]:
         last_response: httpx.Response | None = None
         for attempt in range(self._max_retries + 1):
@@ -180,11 +180,20 @@ class ServiceNowClient:
             raise ServiceNowError(f"Record {table} was not found")
         return result
 
-    def create_record(self, table: str, fields: dict[str, Any]) -> dict[str, Any]:
+    def create_record(
+        self,
+        table: str,
+        fields: dict[str, Any],
+        *,
+        input_display_value: bool = False,
+    ) -> dict[str, Any]:
+        params = {"sysparm_display_value": "false", "sysparm_exclude_reference_link": "true"}
+        if input_display_value:
+            params["sysparm_input_display_value"] = "true"
         payload = self.request(
             "POST",
             f"/api/now/table/{table}",
-            params={"sysparm_display_value": "false", "sysparm_exclude_reference_link": "true"},
+            params=params,
             json=fields,
         )
         result = payload.get("result")
@@ -192,11 +201,21 @@ class ServiceNowClient:
             raise ServiceNowError(f"Create on {table} did not return a record")
         return result
 
-    def update_record(self, table: str, sys_id: str, fields: dict[str, Any]) -> dict[str, Any]:
+    def update_record(
+        self,
+        table: str,
+        sys_id: str,
+        fields: dict[str, Any],
+        *,
+        input_display_value: bool = False,
+    ) -> dict[str, Any]:
+        params = {"sysparm_display_value": "false", "sysparm_exclude_reference_link": "true"}
+        if input_display_value:
+            params["sysparm_input_display_value"] = "true"
         payload = self.request(
             "PATCH",
             f"/api/now/table/{table}/{sys_id}",
-            params={"sysparm_display_value": "false", "sysparm_exclude_reference_link": "true"},
+            params=params,
             json=fields,
         )
         result = payload.get("result")
@@ -206,6 +225,17 @@ class ServiceNowClient:
 
     def delete_record(self, table: str, sys_id: str) -> None:
         self.request("DELETE", f"/api/now/table/{table}/{sys_id}")
+
+    def count(self, table: str, query: str | None = None) -> int:
+        params = {"sysparm_count": "true"}
+        if query:
+            params["sysparm_query"] = query
+        payload = self.request("GET", f"/api/now/stats/{table}", params=params)
+        result = payload.get("result")
+        stats = result.get("stats") if isinstance(result, dict) else None
+        if not isinstance(stats, dict) or "count" not in stats:
+            raise ServiceNowError(f"Count on {table} did not return a count")
+        return int(stats["count"])
 
     def _interpret(self, response: httpx.Response) -> dict[str, Any]:
         if 300 <= response.status_code < 400:

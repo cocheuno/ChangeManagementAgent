@@ -170,3 +170,20 @@ def test_redact_filter_removes_secret_from_log_records() -> None:
     assert RedactFilter([PASSWORD]).filter(record) is True
     assert record.getMessage() == "token ***"
     assert PASSWORD not in record.getMessage()
+
+
+@respx.mock
+def test_count_reads_the_stats_count() -> None:
+    respx.get(url__regex=r".*/api/now/stats/change_request").mock(
+        return_value=httpx.Response(200, json={"result": {"stats": {"count": "12"}}})
+    )
+    assert _client().count("change_request", "state=3") == 12
+
+
+@respx.mock
+def test_count_rejects_a_payload_without_a_count() -> None:
+    respx.get(url__regex=r".*/api/now/stats/change_request").mock(
+        return_value=httpx.Response(200, json={"result": {}})
+    )
+    with pytest.raises(ServiceNowError, match="did not return a count"):
+        _client().count("change_request")

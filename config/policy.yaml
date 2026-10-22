@@ -1,0 +1,40 @@
+# Starting policy for Larkspur Outfitters. Phase 2 may backtest the risk factors.
+# Do not change a threshold without showing the backtest before and after.
+timezone: America/New_York
+lead_time_business_days: {standard: 0, normal_low: 2, normal_moderate: 3, normal_high: 5, emergency: 0}
+maintenance_windows:            # names must match the seeded cmn_schedule records
+  tier1: "SYN Tier-1 Maintenance (Sat 22:00-Sun 04:00)"
+  tier2_3: "SYN Tier-2/3 Maintenance (Tue/Thu 20:00-23:00)"
+freezes:                        # enforced in policy code; this PDI has no service-scoped blackout
+  - {name: "SYN Month-End Close Freeze", services: ["SYN Payments"]}
+  - {name: "SYN Holiday Peak Freeze", services: all}
+risk:
+  factors:
+    service_criticality: {tier1: 3, tier2: 2, tier3: 1}
+    impacted_services: {"1": 0, "2": 2, "3+": 3}
+    similar_change_failure_rate_12m: {lt_5pct: 0, "5_to_15pct": 2, gt_15pct: 3}  # same service + primary CI class
+    change_caused_incidents_90d: {"0": 0, "1": 1, "2+": 2}
+    deployment_method: {automated: 0, manual: 2}
+    outside_maintenance_window: 2
+    friday_evening_start: 1     # Fri 15:00-23:59 local
+    plan_quality_failed_check: 1 # per failed checklist item, max 4
+    emergency: 2
+  tiers: {high: 10, moderate: 6} # score >= 10 High; >= 6 Moderate; else Low
+# The risk tier does not select the approver. It is used only for the CAB agenda
+# and the CAB brief. Authority matches docs/DISCOVERY.md item 5: a normal change
+# is approved by its assignment group at Assess, an emergency change is approved
+# by the CAB Approval group at Authorize, and a standard change is pre-authorized.
+# The same group applies for Low, Moderate, and High.
+change_authority:
+  standard: pre_authorized
+  normal_low: assignment_group
+  normal_moderate: assignment_group
+  normal_high: assignment_group
+  emergency: cab_approval
+verification:
+  error_rate_max_pct: 2.0
+  p95_latency_max_increase_pct: 20
+  availability_min_pct: 99.5
+  window_minutes: 30             # simulated
+standard_change_candidate: {lookback_months: 12, min_executions: 10, max_failures: 0, max_caused_incidents: 0}
+pir_required_when: [unsuccessful, emergency, high_risk, caused_incident]

@@ -1,4 +1,4 @@
-"""Command line interface. Phase 0 provides doctor; later phases add the rest."""
+"""Command line interface. Phase 1 adds seed and teardown."""
 
 from __future__ import annotations
 
@@ -35,6 +35,10 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("doctor", help="Print instance build, plugin status, and login results")
     sub.add_parser("discover", help="Run Phase 0 discovery probes against the PDI")
+    seed_parser = sub.add_parser("seed", help="Generate fixtures and load them into the PDI")
+    seed_parser.add_argument("--seed", type=int, default=42)
+    seed_parser.add_argument("--dry-run", action="store_true")
+    sub.add_parser("teardown", help="Delete synthetic records recorded in the manifest")
     args = parser.parse_args(argv)
     try:
         settings = load_settings()
@@ -42,6 +46,8 @@ def main(argv: list[str] | None = None) -> int:
         print(str(exc), file=sys.stderr)
         return 2
     configure_logging(settings.secret_values())
+    if args.command in {"seed", "teardown"}:
+        configure_logging(settings.secret_values(), level=logging.WARNING)
     if args.command == "doctor":
         report = run_doctor(settings)
         print(redact_text(report.text(), settings.secret_values()))
@@ -51,6 +57,22 @@ def main(argv: list[str] | None = None) -> int:
 
         configure_logging(settings.secret_values(), level=logging.WARNING)
         return run_discover(settings)
+    if args.command == "seed":
+        from cm_agents.data.load import SeedError, seed
+
+        try:
+            return seed(settings, seed=args.seed, dry_run=args.dry_run)
+        except SeedError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+    if args.command == "teardown":
+        from cm_agents.data.teardown import TeardownError, teardown
+
+        try:
+            return teardown(settings)
+        except TeardownError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
     return 2
 
 
