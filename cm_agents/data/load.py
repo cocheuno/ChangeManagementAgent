@@ -8,6 +8,7 @@ the Change API.
 from __future__ import annotations
 
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -29,10 +30,13 @@ from cm_agents.data.queries import (
     GROUP,
     IMPORT_SET,
     INCIDENT,
+    PROPOSAL,
     RELATIONSHIP,
     SCHEDULE,
     SPAN,
     STAGING_TABLE,
+    STD_TEMPLATE,
+    STD_VERSION,
     TASK_CI,
     TEMPLATE,
 )
@@ -154,11 +158,18 @@ class SeedError(Exception):
     """The load cannot continue."""
 
 
-def seed(settings: Settings, *, seed: int = 42, dry_run: bool = False) -> int:
-    fixtures = generate(seed)
+def seed(
+    settings: Settings,
+    *,
+    seed: int = 42,
+    dry_run: bool = False,
+    anchor: datetime | None = None,
+) -> int:
+    fixtures = generate(seed, anchor=anchor)
     directory = repo_root() / "data" / "synthetic"
     digest = write_fixtures(fixtures, directory)
     write_ground_truth(build_ground_truth(fixtures), directory)
+    _say(f"anchor: {fixtures['anchor']}")
     _say(f"fixture hash: {digest}")
     if dry_run:
         return 0
@@ -192,9 +203,10 @@ def _load(
     path: Path,
     seed: int,
 ) -> int:
-    manifest = _prepare_manifest(client, path, seed)
+    manifest = _prepare_manifest(client, path, seed, str(fixtures["anchor"]))
     before = _population(client)
     groups = _ensure_groups(client, manifest, path, fixtures)
+    _ensure_templates(client, manifest, path, fixtures, groups)
     users = _ensure_users(client, manifest, path, fixtures)
     _ensure_integration_user(client, settings, manifest, path)
     _ensure_memberships(client, manifest, path, fixtures, groups, users)
@@ -209,9 +221,11 @@ def _load(
     return _population(client) - before
 
 
-def _prepare_manifest(client: ServiceNowClient, path: Path, seed: int) -> dict[str, Any]:
+def _prepare_manifest(
+    client: ServiceNowClient, path: Path, seed: int, anchor: str
+) -> dict[str, Any]:
     manifest = load_manifest(path)
-    if manifest and manifest.get("seed") != seed:
+    if manifest and (manifest.get("seed") != seed or manifest.get("anchor") != anchor):
         if client.count("change_request", CHANGE):
             raise SeedError("teardown first")
         manifest = None
@@ -220,7 +234,7 @@ def _prepare_manifest(client: ServiceNowClient, path: Path, seed: int) -> dict[s
     if client.count("change_request", CHANGE):
         raise SeedError("teardown first")
     baseline = {table: client.count(table) for table in BASELINE_TABLES}
-    manifest = new_manifest(seed, baseline)
+    manifest = new_manifest(seed, baseline, anchor)
     save_manifest(path, manifest)
     return manifest
 
@@ -550,18 +564,27 @@ def _ensure_relationships(
     cis: dict[str, str],
 ) -> None:
     types = _relationship_types(client)
-    existing = _relationship_keys(client)
+    existing = _relationship_ids(client)
+    recorded = {row["sys_id"] for row in manifest["records"].get("cmdb_rel_ci", [])}
     bodies = []
     keys = []
+    backfilled = False
     for link in fixtures["relationships"]:
         parent = cis[link["parent"]]
         child = cis[link["child"]]
         rel_type = types[link["type"]]
         ident = f"{parent}|{rel_type}|{child}"
+        key = f"{link['parent']}|{link['type']}|{link['child']}"
+        # A row created before a failed manifest write is already on the instance.
         if ident in existing:
+            if existing[ident] not in recorded:
+                add_record(manifest, "cmdb_rel_ci", existing[ident], key)
+                backfilled = True
             continue
         bodies.append({"parent": parent, "child": child, "type": rel_type})
-        keys.append(f"{link['parent']}|{link['type']}|{link['child']}")
+        keys.append(key)
+    if backfilled:
+        save_manifest(path, manifest)
     for offset in range(0, len(bodies), CHUNK):
         try:
             sys_ids = batch_create(client, "cmdb_rel_ci", bodies[offset : offset + CHUNK])
@@ -589,7 +612,7 @@ def _relationship_types(client: ServiceNowClient) -> dict[str, str]:
     return found
 
 
-def _relationship_keys(client: ServiceNowClient) -> set[str]:
+def _relationship_ids(client: ServiceNowClient) -> dict[str, str]:
     rows = client.get_records(
         "cmdb_rel_ci",
         query=RELATIONSHIP,
@@ -597,7 +620,10 @@ def _relationship_keys(client: ServiceNowClient) -> set[str]:
         page_size=200,
         max_records=5000,
     )
-    return {f"{row.get('parent')}|{row.get('type')}|{row.get('child')}" for row in rows}
+    return {
+        f"{row.get('parent')}|{row.get('type')}|{row.get('child')}": str(row["sys_id"])
+        for row in rows
+    }
 
 
 def _import_history(
@@ -620,8 +646,6 @@ def _import_history(
     ids.update(_index(client, "incident", INCIDENT, "correlation_id"))
     releases = [row for row in fixtures["changes"] if row["release"]]
     rest = [row for row in fixtures["changes"] if not row["release"]]
-    bare = [row for row in fixtures["incidents"] if not row["parent"]]
-    caused = [row for row in fixtures["incidents"] if row["parent"]]
     _import_records(
         client,
         manifest,
@@ -641,7 +665,7 @@ def _import_history(
         path,
         incident_table,
         "incident",
-        bare,
+        fixtures["incidents"],
         ids,
         groups,
         requester,
@@ -655,19 +679,6 @@ def _import_history(
         change_table,
         "change_request",
         rest,
-        ids,
-        groups,
-        requester,
-        cis,
-        verify=True,
-    )
-    _import_records(
-        client,
-        manifest,
-        path,
-        incident_table,
-        "incident",
-        caused,
         ids,
         groups,
         requester,
@@ -1168,6 +1179,168 @@ def _diff(key: str, expected: dict[str, object], stored: dict[str, Any]) -> list
     return mismatches
 
 
+def _ensure_templates(
+    client: ServiceNowClient,
+    manifest: dict[str, Any],
+    path: Path,
+    fixtures: dict[str, Any],
+    groups: dict[str, str],
+) -> None:
+    """Publish the six SYN standard templates through an approved proposal.
+
+    The create ACL on std_change_record_producer is answer=false. Approving a
+    New Template proposal runs Generate Template On Approval, which inserts the
+    producer, the version, and the template. The approval engine for this table
+    is off, so admin sets approval=approved. There is no sysapproval_approver row.
+    """
+    catalog, category = _template_catalog(client)
+    for spec in fixtures["templates"]:
+        name = str(spec["name"])
+        existing = client.get_table(
+            "std_change_record_producer",
+            query=f"name={name}",
+            fields=["sys_id", "name", "template", "active"],
+            limit=2,
+        )
+        if existing:
+            _record_template(client, manifest, path, name, str(existing[0]["sys_id"]))
+            _say(f"template present: {name}")
+            continue
+        _publish_template(client, manifest, path, spec, groups, catalog, category)
+        _say(f"template created: {name}")
+    save_manifest(path, manifest)
+
+
+def _template_catalog(client: ServiceNowClient) -> tuple[str, str]:
+    """Catalog and category from the out-of-box Replace printer toner producer."""
+    rows = client.get_table(
+        "std_change_record_producer",
+        query="name=Replace printer toner",
+        fields=["sys_id", "name", "category", "sc_catalogs"],
+        limit=1,
+    )
+    if not rows:
+        raise SeedError("standard template is missing: Replace printer toner")
+    category = str(rows[0].get("category") or "")
+    catalog = str(rows[0].get("sc_catalogs") or "").split(",")[0].strip()
+    if not catalog or not category:
+        raise SeedError("Replace printer toner has no catalog or category")
+    return catalog, category
+
+
+def _publish_template(
+    client: ServiceNowClient,
+    manifest: dict[str, Any],
+    path: Path,
+    spec: dict[str, Any],
+    groups: dict[str, str],
+    catalog: str,
+    category: str,
+) -> None:
+    name = str(spec["name"])
+    group_id = groups[str(spec["group"])]
+    proposal = client.create_record(
+        "std_change_proposal",
+        {
+            "short_description": name,
+            "description": spec["description"],
+            "proposal_type": "1",
+            "template_name": name,
+            "business_justification": spec["justification"],
+            "template_value": _template_value(spec, group_id),
+            "catalog": catalog,
+            "category": category,
+            "state": "1",
+        },
+    )
+    proposal_id = str(proposal["sys_id"])
+    add_record(manifest, "std_change_proposal", proposal_id, name)
+    save_manifest(path, manifest)
+    client.update_record(
+        "std_change_proposal",
+        proposal_id,
+        {"state": "2", "approval": "approved"},
+    )
+    _record_template(client, manifest, path, name, "")
+
+
+def _template_value(spec: dict[str, Any], group_id: str) -> str:
+    pairs = (
+        ("short_description", str(spec["short_description"])),
+        ("description", str(spec["description"])),
+        ("implementation_plan", str(spec["implementation_plan"])),
+        ("backout_plan", str(spec["backout_plan"])),
+        ("test_plan", str(spec["test_plan"])),
+        ("assignment_group", group_id),
+        ("justification", str(spec["justification"])),
+        ("risk_impact_analysis", "Low"),
+    )
+    for key, value in pairs:
+        if "^" in value or (key != "assignment_group" and "=" in value):
+            raise SeedError(f"template value {key} cannot contain ^ or =")
+    return "^".join(f"{key}={value}" for key, value in pairs)
+
+
+def _record_template(
+    client: ServiceNowClient,
+    manifest: dict[str, Any],
+    path: Path,
+    name: str,
+    producer_id: str,
+) -> None:
+    if not producer_id:
+        found = client.get_table(
+            "std_change_record_producer",
+            query=f"name={name}",
+            fields=["sys_id", "name", "template", "active"],
+            limit=2,
+        )
+        if len(found) != 1:
+            raise SeedError(f"template producer was not created: {name}")
+        producer_id = str(found[0]["sys_id"])
+        producer = found[0]
+    else:
+        producer = client.get_record(
+            "std_change_record_producer",
+            producer_id,
+            fields=["sys_id", "name", "template", "active"],
+        )
+    if str(producer.get("active")).lower() not in {"true", "1"}:
+        raise SeedError(f"template producer is inactive: {name}")
+    template_id = str(producer.get("template") or "")
+    if not template_id:
+        bodies = client.get_table(
+            "std_change_template",
+            query=f"name={name}",
+            fields=["sys_id", "name"],
+            limit=2,
+        )
+        if len(bodies) != 1:
+            raise SeedError(f"template body was not created: {name}")
+        template_id = str(bodies[0]["sys_id"])
+    versions = client.get_table(
+        "std_change_producer_version",
+        query=f"std_change_producer={producer_id}",
+        fields=["sys_id"],
+        limit=2,
+    )
+    if len(versions) != 1:
+        raise SeedError(f"template version was not created: {name}")
+    proposals = client.get_table(
+        "std_change_proposal",
+        query=f"template_name={name}",
+        fields=["sys_id", "template_name"],
+        limit=2,
+    )
+    if len(proposals) != 1:
+        raise SeedError(f"template proposal was not recorded: {name}")
+    add_record(manifest, "std_change_proposal", str(proposals[0]["sys_id"]), name)
+    add_record(manifest, "std_change_record_producer", producer_id, name)
+    add_record(manifest, "std_change_producer_version", str(versions[0]["sys_id"]), name)
+    add_record(manifest, "std_change_template", template_id, name)
+    save_manifest(path, manifest)
+
+
 def _print_gate(client: ServiceNowClient, fixtures: dict[str, Any]) -> None:
     changes = fixtures["changes"]
     incidents = fixtures["incidents"]
@@ -1198,13 +1371,6 @@ def _print_gate(client: ServiceNowClient, fixtures: dict[str, Any]) -> None:
             len(incidents),
             _count(client, "incident", "correlation_idSTARTSWITHSYN-INC"),
             150,
-            True,
-        ),
-        _gate_row(
-            "incident caused_by",
-            sum(1 for row in incidents if row["parent"]),
-            _count(client, "incident", "correlation_idSTARTSWITHSYN-INC^parentISNOTEMPTY"),
-            80,
             True,
         ),
         _gate_row(
@@ -1263,18 +1429,45 @@ def _print_gate(client: ServiceNowClient, fixtures: dict[str, Any]) -> None:
         failed = failed or not within
         mark = "yes" if within else "no"
         _say(f"{label} fixture={fixture_count} pdi={pdi_count} target={target} within={mark}")
-    templates = _count(client, "std_change_record_producer", TEMPLATE)
-    freezes = _count(client, "cmn_schedule_blackout", BLACKOUT)
+    caused = sum(1 for row in incidents if row.get("caused_by"))
+    parent_used = _count(client, "incident", f"{INCIDENT}^parentISNOTEMPTY")
     _say(
-        f"std_change_record_producer fixture=0 pdi={templates} target=6 "
-        "exception=create ACL answer=false"
+        f"incident caused_by fixture={caused} loaded=0 "
+        f"pdi_parent={parent_used} decision=open"
     )
+    if parent_used:
+        failed = True
+    resolved_query = f"{INCIDENT}^stateIN6,7"
+    resolved_closed = _count(client, "incident", resolved_query)
+    resolved_empty = _count(client, "incident", f"{resolved_query}^resolved_atISEMPTY")
+    resolved_early = _count(
+        client, "incident", f"{resolved_query}^resolved_atLT_FIELDopened_at"
+    )
+    _say(
+        f"incident resolved_or_closed={resolved_closed} "
+        f"resolved_at_empty={resolved_empty} resolved_before_opened={resolved_early}"
+    )
+    if resolved_empty or resolved_early:
+        failed = True
+    template_rows = (
+        ("std_change_record_producer", TEMPLATE),
+        ("std_change_proposal", PROPOSAL),
+        ("std_change_producer_version", STD_VERSION),
+        ("std_change_template", STD_TEMPLATE),
+    )
+    template_count = len(fixtures["templates"])
+    for label, query in template_rows:
+        pdi_count = _count(client, label, query)
+        within = pdi_count == template_count == 6
+        failed = failed or not within
+        mark = "yes" if within else "no"
+        _say(f"{label} fixture={template_count} pdi={pdi_count} target=6 within={mark}")
+    freezes = _count(client, "cmn_schedule_blackout", BLACKOUT)
     _say(f"cmn_schedule_blackout fixture=0 pdi={freezes} target=2 exception=policy code")
-    if failed or templates or freezes:
+    if failed or freezes:
         if failed:
             raise SeedError("fixture counts are not equal to the PDI or are outside the target")
-        if templates or freezes:
-            raise SeedError("unexpected synthetic templates or blackouts are present")
+        raise SeedError("unexpected synthetic blackouts are present")
 
 
 def _print_samples(client: ServiceNowClient, fixtures: dict[str, Any]) -> None:
@@ -1285,6 +1478,8 @@ def _print_samples(client: ServiceNowClient, fixtures: dict[str, Any]) -> None:
         "active",
         "approval",
         "opened_at",
+        "start_date",
+        "work_end",
         "closed_at",
         "close_code",
         "short_description",
@@ -1294,6 +1489,7 @@ def _print_samples(client: ServiceNowClient, fixtures: dict[str, Any]) -> None:
         "state",
         "active",
         "opened_at",
+        "resolved_at",
         "closed_at",
         "close_code",
         "short_description",
@@ -1466,6 +1662,10 @@ def _population(client: ServiceNowClient) -> int:
         ("sys_user_grmember", "user.user_nameSTARTSWITHsyn."),
         ("sys_import_set", IMPORT_SET),
         ("sys_db_object", STAGING_TABLE),
+        ("std_change_record_producer", TEMPLATE),
+        ("std_change_proposal", PROPOSAL),
+        ("std_change_producer_version", STD_VERSION),
+        ("std_change_template", STD_TEMPLATE),
     )
     return sum(_count(client, table, query) for table, query in queries)
 

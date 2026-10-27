@@ -14,11 +14,16 @@ from cm_agents.data.queries import (
     INCIDENT,
     MEMBERSHIP,
     OWNED_MEMBERSHIP_GROUPS,
+    PROPOSAL,
     RELATIONSHIP,
     ROLE,
     SCHEDULE,
     SPAN,
     STAGING_TABLE,
+    STD_DELETE_MAP,
+    STD_DELETE_STAGE,
+    STD_TEMPLATE,
+    STD_VERSION,
     TASK_CI,
     TEMPLATE,
     TRANSFORM_ENTRY,
@@ -61,6 +66,10 @@ SWEEPS_AFTER_USERS = (
     ("sys_dictionary", DICTIONARY),
 )
 RECORD_ORDER = (
+    "std_change_producer_version",
+    "std_change_record_producer",
+    "std_change_template",
+    "std_change_proposal",
     "cmdb_rel_ci",
     "incident",
     "change_request",
@@ -94,6 +103,9 @@ SYN_LEFT = (
     ("cmn_schedule", SCHEDULE),
     ("cmn_schedule_span", SPAN),
     ("std_change_record_producer", TEMPLATE),
+    ("std_change_proposal", PROPOSAL),
+    ("std_change_producer_version", STD_VERSION),
+    ("std_change_template", STD_TEMPLATE),
     ("cmn_schedule_blackout", BLACKOUT),
     ("sys_import_set", IMPORT_SET),
     ("sys_db_object", STAGING_TABLE),
@@ -103,6 +115,14 @@ UPDATE_XML_QUERY = (
     "nameLIKEu_syn_chg_import^ORnameLIKEu_syn_inc_import^ORnameLIKEu_syn_taskci_import"
     "^ORtarget_nameLIKEu_syn_chg_import^ORtarget_nameLIKEu_syn_inc_import"
     "^ORtarget_nameLIKEu_syn_taskci_import"
+    "^ORnameLIKEu_syn_std_delete^ORtarget_nameLIKEu_syn_std_delete"
+)
+IMPORT_ROW = "06803e7b8c1103100a22deb6dd2b4e9c"
+STANDARD_LEFT = (
+    ("std_change_producer_version", STD_VERSION),
+    ("std_change_record_producer", TEMPLATE),
+    ("std_change_template", STD_TEMPLATE),
+    ("std_change_proposal", PROPOSAL),
 )
 
 
@@ -137,6 +157,7 @@ def teardown(settings: Settings) -> int:
         for table, query in SWEEPS_AFTER_USERS:
             print(f"sweep {table}", flush=True)
             _sweep(client, table, query)
+        _delete_standard_catalog(client, manifest)
         _delete_recorded(client, manifest)
         for _ in range(4):
             if not _sweep(client, "sys_update_xml", UPDATE_XML_QUERY):
@@ -358,6 +379,165 @@ def _still_there(client: ServiceNowClient, table: str, sys_id: str) -> bool:
             return False
         raise
     return bool(rows)
+
+
+def _delete_standard_catalog(client: ServiceNowClient, manifest: dict[str, object]) -> None:
+    """Remove SYN standard templates. Table API delete on these tables is denied.
+
+    An onBefore transform script calls GlideRecord.deleteRecord. The staging
+    table exists only for that call and is dropped before this function returns.
+    """
+    ids = _standard_ids(client, manifest)
+    if ids:
+        _transform_delete_ids(client, ids)
+    _drop_template_stage(client)
+    for table, _query in STANDARD_LEFT:
+        for sys_id in ids:
+            if _still_there(client, table, sys_id):
+                raise TeardownError(f"could not delete {table}")
+
+
+def _standard_ids(client: ServiceNowClient, manifest: dict[str, object]) -> list[str]:
+    found: list[str] = []
+    records = manifest.get("records")
+    if isinstance(records, dict):
+        for table, _query in STANDARD_LEFT:
+            rows = records.get(table)
+            if not isinstance(rows, list):
+                continue
+            for row in rows:
+                if isinstance(row, dict) and row.get("sys_id"):
+                    _add_sys_id(found, str(row["sys_id"]))
+    for table, query in STANDARD_LEFT:
+        for sys_id in _ids_for(client, table, query):
+            _add_sys_id(found, sys_id)
+    producers = [
+        sys_id
+        for sys_id in found
+        if _still_there(client, "std_change_record_producer", sys_id)
+    ]
+    for producer_id in producers:
+        for sys_id in _ids_for(
+            client,
+            "std_change_producer_version",
+            f"std_change_producer={producer_id}",
+        ):
+            _add_sys_id(found, sys_id)
+    return found
+
+
+def _add_sys_id(found: list[str], sys_id: str) -> None:
+    sys_id = sys_id.lower()
+    if len(sys_id) != 32 or any(char not in "0123456789abcdef" for char in sys_id):
+        raise TeardownError("refusing to delete an unexpected sys_id")
+    if sys_id not in found:
+        found.append(sys_id)
+
+
+def _transform_delete_ids(client: ServiceNowClient, ids: list[str]) -> None:
+    _drop_template_stage(client)
+    quoted = ", ".join(f"'{sys_id}'" for sys_id in ids)
+    script = (
+        "// SYN standard template delete\n"
+        "(function runTransformScript(source, map, log, target) {\n"
+        f"  var ids = [{quoted}];\n"
+        "  var tables = ['std_change_producer_version', 'std_change_record_producer', "
+        "'std_change_template', 'std_change_proposal'];\n"
+        "  for (var t = 0; t < tables.length; t++) {\n"
+        "    for (var i = 0; i < ids.length; i++) {\n"
+        "      var gr = new GlideRecord(tables[t]);\n"
+        "      if (gr.get(ids[i])) {\n"
+        "        gr.setWorkflow(false);\n"
+        "        gr.deleteRecord();\n"
+        "      }\n"
+        "    }\n"
+        "  }\n"
+        "  ignore = true;\n"
+        "})(source, map, log, target);\n"
+    )
+    stage = client.create_record(
+        "sys_db_object",
+        {
+            "label": STD_DELETE_MAP,
+            "name": STD_DELETE_STAGE,
+            "super_class": IMPORT_ROW,
+            "create_access_controls": "false",
+            "create_module": "false",
+            "is_extendable": "false",
+        },
+    )
+    table = str(stage.get("name") or STD_DELETE_STAGE)
+    client.create_record(
+        "sys_dictionary",
+        {
+            "name": table,
+            "element": "u_target",
+            "column_label": "target",
+            "internal_type": "string",
+            "max_length": "40",
+            "active": "true",
+        },
+    )
+    transform = client.create_record(
+        "sys_transform_map",
+        {
+            "name": STD_DELETE_MAP,
+            "source_table": table,
+            "target_table": "std_change_proposal",
+            "active": "true",
+            "run_business_rules": "false",
+            "run_script": "true",
+            "enforce_mandatory_fields": "false",
+            "order": "100",
+        },
+    )
+    client.create_record(
+        "sys_transform_script",
+        {
+            "map": str(transform["sys_id"]),
+            "when": "onBefore",
+            "active": "true",
+            "order": "100",
+            "script": script,
+        },
+    )
+    try:
+        client.request("POST", f"/api/now/import/{table}", json={"u_target": ids[0]})
+    except ServiceNowError:
+        pass
+
+
+def _drop_template_stage(client: ServiceNowClient) -> None:
+    map_ids = _ids_for(client, "sys_transform_map", f"name={STD_DELETE_MAP}")
+    script_ids = _ids_for(client, "sys_transform_script", "scriptLIKE SYN standard template delete")
+    for map_id in map_ids:
+        script_ids.extend(
+            _ids_for(client, "sys_transform_script", f"map={map_id}")
+        )
+    for sys_id in script_ids:
+        _delete_quiet(client, "sys_transform_script", sys_id)
+    for table, query in (
+        ("sys_import_set", f"table_name={STD_DELETE_STAGE}"),
+        ("sys_transform_map", f"name={STD_DELETE_MAP}"),
+        ("sys_dictionary", f"name={STD_DELETE_STAGE}"),
+        ("sys_db_object", f"name={STD_DELETE_STAGE}"),
+        ("sys_update_xml", f"nameLIKE{STD_DELETE_STAGE}^ORtarget_nameLIKE{STD_DELETE_STAGE}"),
+    ):
+        for sys_id in _ids_for(client, table, query):
+            _delete_quiet(client, table, sys_id)
+    if _match_count(client, "sys_db_object", f"name={STD_DELETE_STAGE}", 1):
+        raise TeardownError("template delete staging table remains")
+    if _match_count(client, "sys_transform_map", f"name={STD_DELETE_MAP}", 1):
+        raise TeardownError("template delete transform map remains")
+
+
+def _delete_quiet(client: ServiceNowClient, table: str, sys_id: str) -> None:
+    try:
+        client.delete_record(table, sys_id)
+    except ServiceNowError as exc:
+        if exc.status_code in {403, 404}:
+            return
+        raise
 
 
 def _delete_recorded(client: ServiceNowClient, manifest: dict[str, object]) -> None:

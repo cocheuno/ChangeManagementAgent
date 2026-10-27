@@ -37,6 +37,11 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("discover", help="Run Phase 0 discovery probes against the PDI")
     seed_parser = sub.add_parser("seed", help="Generate fixtures and load them into the PDI")
     seed_parser.add_argument("--seed", type=int, default=42)
+    seed_parser.add_argument(
+        "--anchor",
+        default=None,
+        help="UTC load date, YYYY-MM-DD or YYYY-MM-DD HH:MM:SS. Default: midnight UTC today",
+    )
     seed_parser.add_argument("--dry-run", action="store_true")
     sub.add_parser("teardown", help="Delete synthetic records recorded in the manifest")
     args = parser.parse_args(argv)
@@ -58,11 +63,17 @@ def main(argv: list[str] | None = None) -> int:
         configure_logging(settings.secret_values(), level=logging.WARNING)
         return run_discover(settings)
     if args.command == "seed":
+        from cm_agents.data.generate import AnchorError, parse_anchor
         from cm_agents.data.load import SeedError, seed
 
         try:
-            return seed(settings, seed=args.seed, dry_run=args.dry_run)
-        except SeedError as exc:
+            anchor = parse_anchor(args.anchor) if args.anchor else None
+        except AnchorError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        try:
+            return seed(settings, seed=args.seed, dry_run=args.dry_run, anchor=anchor)
+        except (SeedError, AnchorError) as exc:
             print(str(exc), file=sys.stderr)
             return 1
     if args.command == "teardown":

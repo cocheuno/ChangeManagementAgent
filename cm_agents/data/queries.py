@@ -50,23 +50,33 @@ USER = "user_nameSTARTSWITHsyn."
 MEMBERSHIP = "user.user_nameSTARTSWITHsyn."
 ROLE = "user.user_nameSTARTSWITHsyn."
 TEMPLATE = "nameSTARTSWITHSYN Tier-^ORnameSTARTSWITHSYN Standard"
+PROPOSAL = (
+    "template_nameSTARTSWITHSYN Standard^ORshort_descriptionSTARTSWITHSYN Standard"
+)
+STD_TEMPLATE = "nameSTARTSWITHSYN Standard"
+STD_VERSION = "std_change_producer.nameSTARTSWITHSYN Standard"
+STD_DELETE_STAGE = "u_syn_std_delete"
+STD_DELETE_MAP = "SYN Standard Template Delete"
 BLACKOUT = "nameSTARTSWITHSYN Freeze"
 IMPORT_SET = (
     "table_name=u_syn_chg_import^ORtable_name=u_syn_inc_import"
-    "^ORtable_name=u_syn_taskci_import"
+    "^ORtable_name=u_syn_taskci_import^ORtable_name=u_syn_std_delete"
 )
 TRANSFORM_MAP = (
     "name=SYN Change Import^ORname=SYN Incident Import^ORname=SYN Task CI Import"
+    "^ORname=SYN Standard Template Delete"
 )
 TRANSFORM_ENTRY = (
     "source_table=u_syn_chg_import^ORsource_table=u_syn_inc_import"
-    "^ORsource_table=u_syn_taskci_import"
+    "^ORsource_table=u_syn_taskci_import^ORsource_table=u_syn_std_delete"
 )
 DICTIONARY = (
     "name=u_syn_chg_import^ORname=u_syn_inc_import^ORname=u_syn_taskci_import"
+    "^ORname=u_syn_std_delete"
 )
 STAGING_TABLE = (
     "name=u_syn_chg_import^ORname=u_syn_inc_import^ORname=u_syn_taskci_import"
+    "^ORname=u_syn_std_delete"
 )
 
 

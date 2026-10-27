@@ -27,13 +27,16 @@ These are the choices the build proceeds with. Phase 0 left four decisions open.
 - Seeded changes and incidents load through the Import Set API, one row at a time, with business rules off. The loader converts UTC date-times to `America/Los_Angeles` wall time before that call. A timestamp in the repeated Pacific fall-back hour is stored one hour later, so the fixture uses that later instant. Later agent-created changes use the Change API. Each staging table's import set stays in state `loading`. Teardown deletes those sets by staging table name.
 - Teardown deletes membership rows only in the six SYN groups and in Change Management, CAB Approval, and eCAB Approval. It then deletes the synthetic users, including the integration user. It does not chase the platform membership `Conditional Script Writer`, which the instance adds back after a delete.
 - Affected CI rows (`task_ci`) use that same Import Set path. The Table API insert is aborted by business rule `Change Model: Read only CI (Insert)`. See `docs/DISCOVERY.md` item 9.
-- `incident.caused_by` does not exist. Metrics and scenarios that say `caused_by` mean `incident.parent`.
-- `change_authority` in `config/policy.yaml` matches `docs/DISCOVERY.md` item 5. The risk tier does not select the approver.
+- `incident.caused_by` does not exist on this PDI. The logical link is the fixture field `caused_by`. It is not loaded, and `incident.parent` is not used for it. Emergency changes still use `change.parent` for the triggering incident. Release members still use `change.parent` for the release change. See `docs/DISCOVERY.md` item 9.
+- The generator anchor defaults to midnight UTC on the UTC load date. `--anchor` pins it. The same seed and the same anchor are byte-identical. The anchor is stored on the fixture, in `ground_truth.json`, and in the manifest. Every `opened_at` is before the anchor. Only open-change planned dates may fall in the next 6 weeks.
+- `change_authority` in `config/policy.yaml` matches `docs/DISCOVERY.md` item 5. A normal change, at every risk tier, is approved by its assignment group at Assess and by CAB Approval at Authorize. An emergency change is approved by CAB Approval at Authorize. The risk tier does not select the approver.
 - `change_request.risk` and `impact` are the agent's score, written with a plain field update. Phase 2 tests that the score survives state transitions up to Scheduled.
-- Standard change templates are not seeded. The create ACL on `std_change_record_producer` returns `answer=false` and does not let admin override it. Freezes stay in policy code.
+- The six `SYN Standard` templates are published through a Standard Change Template Proposal. S01 uses `SYN Standard rotate TLS certificate`. The create ACL on `std_change_record_producer` is unchanged. Freezes stay in policy code.
 - Schedule records use `time_zone=US/Eastern` because `America/New_York` is stored empty. Policy math still uses `America/New_York`.
-- S02 expects authority `assignment_group`, not `change_manager`. S03 expects `assignment_group`, not CAB. S05 expects `cab_approval`, not ECAB. The other assertions in those scenarios are unchanged.
+- S02 expects Assess `assignment_group` and then Authorize `cab_approval`, plus one `go_no_go`. S03 expects the same two steps, and the human rejects at CAB Approval. S05 expects `cab_approval` at Authorize. The freeze, the rejection, and "no go/no-go" on the emergency path are unchanged.
 
 ## Open
 
-None from Phase 0. Phase 2 still has to prove that an agent-written risk value survives each state transition up to Scheduled.
+How to store a change-caused incident on the instance is undecided. The options are in `docs/DISCOVERY.md` item 9. Do not use `incident.parent` for that link.
+
+Phase 2 still has to prove that an agent-written risk value survives each state transition up to Scheduled. Phase 2 also has to show that the Intake agent can add affected CIs to a new change through the Change API. A Table API insert into `task_ci` is blocked by business rule `Change Model: Read only CI (Insert)`.

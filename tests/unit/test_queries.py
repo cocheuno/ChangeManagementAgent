@@ -11,6 +11,8 @@ def test_ci_query_does_not_use_a_bare_syn_prefix() -> None:
 def test_task_ci_staging_table_is_removed_with_the_other_import_tables() -> None:
     assert "u_syn_taskci_import" in IMPORT_SET
     assert "u_syn_taskci_import" in STAGING_TABLE
+    assert "u_syn_std_delete" in IMPORT_SET
+    assert "u_syn_std_delete" in STAGING_TABLE
 
 
 def test_out_of_box_package_names_are_not_synthetic() -> None:

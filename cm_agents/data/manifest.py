@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -17,14 +18,27 @@ def load_manifest(path: Path) -> dict[str, Any] | None:
 
 
 def save_manifest(path: Path, manifest: dict[str, Any]) -> None:
+    """Write the manifest. Retry when OneDrive briefly locks the file."""
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(manifest, indent=2, sort_keys=True) + "\n"
-    path.write_text(payload, encoding="utf-8")
+    delay = 0.5
+    locked: PermissionError | None = None
+    for _ in range(8):
+        try:
+            path.write_text(payload, encoding="utf-8")
+            return
+        except PermissionError as exc:
+            locked = exc
+            time.sleep(delay)
+            delay = min(delay * 2, 8.0)
+    if locked is not None:
+        raise locked
 
 
-def new_manifest(seed: int, baseline: dict[str, int]) -> dict[str, Any]:
+def new_manifest(seed: int, baseline: dict[str, int], anchor: str) -> dict[str, Any]:
     return {
         "seed": seed,
+        "anchor": anchor,
         "baseline": baseline,
         "records": {},
         "import_sets": [],

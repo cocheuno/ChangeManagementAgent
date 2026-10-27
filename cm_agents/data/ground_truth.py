@@ -28,14 +28,16 @@ def build_ground_truth(fixtures: dict[str, Any]) -> dict[str, Any]:
     ]
     implemented = [row for row in period if row["state"] == "3"]
     pattern_rows = [row for row in implemented if not row["release"]]
-    caused_parents = {
-        row["parent"]
+    caused_changes = {
+        row["caused_by"]
         for row in incidents
-        if row["parent"].startswith("SYN-CHG") or row["parent"].startswith("SYN-REL")
+        if str(row.get("caused_by", "")).startswith("SYN-CHG")
+        or str(row.get("caused_by", "")).startswith("SYN-REL")
     }
     weeks = (end - start).total_seconds() / (7 * 24 * 3600)
-    candidates = _candidates(pattern_rows, caused_parents)
+    candidates = _candidates(pattern_rows, caused_changes)
     return {
+        "anchor": fixtures["anchor"],
         "period": {"start": fixtures["history_start"], "end": fixtures["anchor"]},
         "patterns": {
             "p1": _p1(pattern_rows),
@@ -56,7 +58,7 @@ def build_ground_truth(fixtures: dict[str, Any]) -> dict[str, Any]:
                 )
                 for change_type in ("standard", "normal", "emergency")
             },
-            "failure_rate_pct": _failure_pct(implemented, caused_parents),
+            "failure_rate_pct": _failure_pct(implemented, caused_changes),
             "emergency_ratio_pct": _share_pct(period, "emergency"),
             "standard_share_pct": _share_pct(period, "standard"),
             "lead_time_hours": _lead_time(implemented),
@@ -66,7 +68,10 @@ def build_ground_truth(fixtures: dict[str, Any]) -> dict[str, Any]:
         },
         "standard_change_candidates": [row["signature"] for row in candidates],
         "notes": {
-            "caused_by": "incident.parent on this PDI",
+            "caused_by": (
+                "recorded on the fixture only; this PDI has no incident.caused_by "
+                "field and incident.parent is not used"
+            ),
             "patterns_exclude_releases": True,
             "risk_tier_selects_approver": False,
         },
@@ -105,8 +110,8 @@ def _count_month(rows: list[dict[str, Any]]) -> dict[str, int]:
     return totals
 
 
-def _failed(row: dict[str, Any], caused_parents: set[str]) -> bool:
-    return row["close_code"] == "unsuccessful" or row["key"] in caused_parents
+def _failed(row: dict[str, Any], caused_changes: set[str]) -> bool:
+    return row["close_code"] == "unsuccessful" or row["key"] in caused_changes
 
 
 def _success_pct(rows: list[dict[str, Any]]) -> float:
@@ -114,8 +119,8 @@ def _success_pct(rows: list[dict[str, Any]]) -> float:
     return _pct(ok, len(rows))
 
 
-def _failure_pct(rows: list[dict[str, Any]], caused_parents: set[str]) -> float:
-    failed = sum(1 for row in rows if _failed(row, caused_parents))
+def _failure_pct(rows: list[dict[str, Any]], caused_changes: set[str]) -> float:
+    failed = sum(1 for row in rows if _failed(row, caused_changes))
     return _pct(failed, len(rows))
 
 
@@ -208,7 +213,7 @@ def _signature(row: dict[str, Any]) -> str:
 
 
 def _candidates(
-    rows: list[dict[str, Any]], caused_parents: set[str]
+    rows: list[dict[str, Any]], caused_changes: set[str]
 ) -> list[dict[str, Any]]:
     groups: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
     for row in rows:
@@ -219,7 +224,7 @@ def _candidates(
     found = []
     for (signature, ci_class, group), members in groups.items():
         failures = sum(1 for row in members if row["close_code"] == "unsuccessful")
-        caused = sum(1 for row in members if row["key"] in caused_parents)
+        caused = sum(1 for row in members if row["key"] in caused_changes)
         if len(members) >= 10 and failures == 0 and caused == 0:
             found.append(
                 {
@@ -257,8 +262,10 @@ def _frequency(rows: list[dict[str, Any]], weeks: float) -> dict[str, float]:
 def _mttr(incidents: list[dict[str, Any]]) -> float:
     hours = []
     for row in incidents:
-        change_parent = row["parent"].startswith("SYN-CHG") or row["parent"].startswith("SYN-REL")
-        if change_parent and row["opened_at"] and row["resolved_at"]:
+        caused = str(row.get("caused_by", "")).startswith("SYN-CHG") or str(
+            row.get("caused_by", "")
+        ).startswith("SYN-REL")
+        if caused and row["opened_at"] and row["resolved_at"]:
             delta = _parse(row["resolved_at"]) - _parse(row["opened_at"])
             hours.append(delta.total_seconds() / 3600)
     return round(_median(hours), 1)

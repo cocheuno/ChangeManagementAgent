@@ -10,10 +10,10 @@ def test_change_authority_matches_discovery() -> None:
     policy = yaml.safe_load(path.read_text(encoding="utf-8"))
     assert policy["change_authority"] == {
         "standard": "pre_authorized",
-        "normal_low": "assignment_group",
-        "normal_moderate": "assignment_group",
-        "normal_high": "assignment_group",
-        "emergency": "cab_approval",
+        "normal_low": {"assess": "assignment_group", "authorize": "cab_approval"},
+        "normal_moderate": {"assess": "assignment_group", "authorize": "cab_approval"},
+        "normal_high": {"assess": "assignment_group", "authorize": "cab_approval"},
+        "emergency": {"authorize": "cab_approval"},
     }
     assert policy["timezone"] == "America/New_York"
     assert policy["risk"]["tiers"] == {"high": 10, "moderate": 6}

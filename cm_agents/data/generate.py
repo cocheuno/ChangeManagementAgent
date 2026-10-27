@@ -1,7 +1,8 @@
 """Deterministic synthetic fixtures for Larkspur Outfitters.
 
-The same seed produces the same JSON. Dates are relative to a fixed anchor so the
-fixtures do not change from one day to the next.
+The same seed and the same anchor produce the same JSON. The anchor defaults to
+midnight UTC on the current UTC date, which is the load date. Pass an anchor
+when the fixtures must stay byte-identical from one day to the next.
 """
 
 from __future__ import annotations
@@ -15,10 +16,9 @@ from typing import Any
 
 from faker import Faker
 
-from cm_agents.data.import_time import EASTERN, UTC, format_utc
+from cm_agents.data.import_time import EASTERN, UTC, format_utc, parse_utc
 
-ANCHOR = datetime(2026, 10, 22, 16, 0, tzinfo=UTC)
-HISTORY_START = ANCHOR - timedelta(days=365)
+OPEN_WINDOW = timedelta(days=42)
 
 MODEL_NORMAL = "007c4001c343101035ae3f52c1d3aeb2"
 MODEL_EMERGENCY = "62d10fa1c303101035ae3f52c1d3aec1"
@@ -90,15 +90,119 @@ RELEASE_VERSIONS = ("2025.11.0", "2026.01.0", "2026.03.0", "2026.05.0", "2026.07
 LATE_RELEASES = {("store", "2025.11.0"), ("ful", "2026.03.0"), ("hr", "2026.05.0")}
 ROLLED_BACK_RELEASES = {("pay", "2026.01.0")}
 
+# Names carry the SYN prefix. The loader publishes each row through a Standard
+# Change Template Proposal. Text must not contain "^" or "="; it is sent as one
+# encoded template_value query.
+TEMPLATES = (
+    {
+        "name": "SYN Standard rotate TLS certificate",
+        "group": "SYN Store DevOps",
+        "short_description": "SYN rotate TLS certificate",
+        "description": (
+            "Replace the TLS certificate on a non-production endpoint and reload the listener."
+        ),
+        "implementation_plan": "1. Install the new certificate. 2. Reload the listener.",
+        "backout_plan": "Restore the previous certificate and reload the listener.",
+        "test_plan": "The endpoint presents the new certificate and returns HTTP 200.",
+        "justification": "Keep the certificate inside its validity window.",
+    },
+    {
+        "name": "SYN Standard OS patch on a non-PROD server",
+        "group": "SYN Platform Ops",
+        "short_description": "SYN apply an OS patch on a non-PROD server",
+        "description": (
+            "Apply one approved operating-system patch on a non-production server and reboot it."
+        ),
+        "implementation_plan": "1. Apply the approved patch. 2. Reboot the server.",
+        "backout_plan": "Uninstall the patch and reboot the server.",
+        "test_plan": "The server answers monitoring and the patch is listed as installed.",
+        "justification": "Keep non-production servers on the approved patch level.",
+    },
+    {
+        "name": "SYN Standard restart application service",
+        "group": "SYN Store DevOps",
+        "short_description": "SYN restart an application service",
+        "description": "Restart one application service on a non-production server.",
+        "implementation_plan": "1. Stop the service. 2. Start the service.",
+        "backout_plan": "Start the service again from the previous build.",
+        "test_plan": "The health endpoint returns HTTP 200.",
+        "justification": "Clear a stuck worker without changing the build.",
+    },
+    {
+        "name": "SYN Standard scale out web tier node",
+        "group": "SYN Store DevOps",
+        "short_description": "SYN scale out one web tier node",
+        "description": (
+            "Add one web tier node from the existing image and attach it to the load balancer."
+        ),
+        "implementation_plan": (
+            "1. Start a node from the current image. 2. Add it to the load balancer."
+        ),
+        "backout_plan": "Remove the node from the load balancer and stop it.",
+        "test_plan": "The load balancer reports the new node as healthy.",
+        "justification": "Add capacity for a known traffic peak.",
+    },
+    {
+        "name": "SYN Standard update DNS CNAME",
+        "group": "SYN Platform Ops",
+        "short_description": "SYN update a DNS CNAME",
+        "description": "Point one existing CNAME at another approved target in the same service.",
+        "implementation_plan": (
+            "1. Update the CNAME. 2. Confirm the resolver returns the new target."
+        ),
+        "backout_plan": "Restore the previous CNAME target.",
+        "test_plan": (
+            "The resolver returns the new target and the health endpoint returns HTTP 200."
+        ),
+        "justification": "Move a name to the current target without changing the application.",
+    },
+    {
+        "name": "SYN Standard toggle a configuration flag",
+        "group": "SYN Payments DevOps",
+        "short_description": "SYN toggle a configuration flag",
+        "description": "Turn one documented configuration flag on or off and reload the service.",
+        "implementation_plan": "1. Set the flag to the requested value. 2. Reload the service.",
+        "backout_plan": "Restore the previous flag value and reload the service.",
+        "test_plan": (
+            "The service reports the requested flag value and the health endpoint returns HTTP 200."
+        ),
+        "justification": "Change one documented flag without a code deploy.",
+    },
+)
 
-def generate(seed: int = 42) -> dict[str, Any]:
+
+class AnchorError(ValueError):
+    """The anchor text is not a UTC date or a UTC date-time."""
+
+
+def default_anchor(now: datetime | None = None) -> datetime:
+    """Midnight UTC on the UTC calendar date of `now`. That date is the load date."""
+    moment = now.astimezone(UTC) if now is not None else datetime.now(UTC)
+    return moment.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def parse_anchor(text: str) -> datetime:
+    """Parse `YYYY-MM-DD` or `YYYY-MM-DD HH:MM:SS` as UTC. A date is midnight."""
+    raw = text.strip()
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+        try:
+            parsed = datetime.strptime(raw, fmt)
+        except ValueError:
+            continue
+        return parsed.replace(tzinfo=UTC)
+    raise AnchorError("anchor must be YYYY-MM-DD or YYYY-MM-DD HH:MM:SS in UTC")
+
+
+def generate(seed: int = 42, anchor: datetime | None = None) -> dict[str, Any]:
     """Build the fixture document for `seed`. Names use Faker; everything else is fixed."""
+    chosen = _as_utc(anchor) if anchor is not None else default_anchor()
+    history_start = chosen - timedelta(days=365)
     cis = _cis()
-    changes, incidents = _changes_and_incidents(cis)
+    changes, incidents = _changes_and_incidents(cis, chosen)
     fixtures: dict[str, Any] = {
         "seed": seed,
-        "anchor": format_utc(ANCHOR),
-        "history_start": format_utc(HISTORY_START),
+        "anchor": format_utc(chosen),
+        "history_start": format_utc(history_start),
         "company": "Larkspur Outfitters",
         "services": [_service_row(row) for row in SERVICES],
         "cis": [_ci_row(row) for row in cis],
@@ -108,11 +212,19 @@ def generate(seed: int = 42) -> dict[str, Any]:
         "schedules": _schedules(),
         "changes": changes,
         "incidents": incidents,
+        "templates": [dict(row) for row in TEMPLATES],
         "task_ci": _task_links(changes, cis),
         "samples": _samples(changes, incidents),
     }
     _check_shape(fixtures)
+    _check_dates(fixtures, chosen, history_start)
     return fixtures
+
+
+def _as_utc(anchor: datetime) -> datetime:
+    if anchor.tzinfo is None:
+        raise AnchorError("anchor must be timezone-aware UTC")
+    return anchor.astimezone(UTC).replace(microsecond=0)
 
 
 def write_fixtures(fixtures: dict[str, Any], directory: Path) -> str:
@@ -412,6 +524,7 @@ def _schedules() -> list[dict[str, Any]]:
 
 def _changes_and_incidents(
     cis: list[dict[str, Any]],
+    anchor: datetime,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     changes: list[dict[str, Any]] = []
     incidents: list[dict[str, Any]] = []
@@ -600,8 +713,8 @@ def _changes_and_incidents(
     changes.extend(releases)
     _link_triggers(changes, incidents)
     _link_caused_by(changes, incidents)
-    incidents.extend(_open_incidents(cis))
-    changes.extend(_open_changes(cis))
+    incidents.extend(_open_incidents(cis, anchor))
+    changes.extend(_open_changes(cis, anchor))
     _assign_keys(changes, incidents)
     return changes, incidents
 
@@ -858,12 +971,12 @@ def _link_caused_by(changes: list[dict[str, Any]], incidents: list[dict[str, Any
                 resolved_at=opened + timedelta(hours=4),
                 closed_at=None if resolved else opened + timedelta(hours=6),
                 close_code="Workaround provided" if resolved else "Resolved by change",
-                parent_summary=change["short_description"],
+                caused_by_summary=change["short_description"],
             )
         )
 
 
-def _open_incidents(cis: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _open_incidents(cis: list[dict[str, Any]], anchor: datetime) -> list[dict[str, Any]]:
     apps = [row for row in cis if row["ci_class"] == "cmdb_ci_appl"]
     rows = []
     for index in range(6):
@@ -877,7 +990,7 @@ def _open_incidents(cis: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 impact="3",
                 urgency="3",
                 priority="4",
-                opened_at=ANCHOR + timedelta(days=2 + index),
+                opened_at=anchor - timedelta(days=1, hours=index),
                 resolved_at=None,
                 closed_at=None,
                 close_code="",
@@ -901,7 +1014,7 @@ def _incident(
     closed_at: datetime | None,
     close_code: str,
     parent: str = "",
-    parent_summary: str = "",
+    caused_by_summary: str = "",
 ) -> dict[str, Any]:
     return {
         "key": "",
@@ -922,11 +1035,12 @@ def _incident(
         "assignment_group": GROUP_DESK,
         "caller_role": "service_desk",
         "parent": parent,
-        "parent_summary": parent_summary,
+        "caused_by": "",
+        "caused_by_summary": caused_by_summary,
     }
 
 
-def _open_changes(cis: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _open_changes(cis: list[dict[str, Any]], anchor: datetime) -> list[dict[str, Any]]:
     apps = [
         row
         for row in cis
@@ -942,7 +1056,7 @@ def _open_changes(cis: list[dict[str, Any]]) -> list[dict[str, Any]]:
             state, approval = "-4", "requested"
         ci = apps[index]
         service = SERVICE_BY_NAME[ci["service"]]
-        start = ANCHOR + timedelta(days=7 + index)
+        start = anchor + timedelta(days=7 + index)
         rows.append(
             _base(
                 service=service["name"],
@@ -956,7 +1070,7 @@ def _open_changes(cis: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 approval=approval,
                 close_code="",
                 summary=f"SYN open change {index + 1}",
-                opened_at=ANCHOR + timedelta(days=1),
+                opened_at=anchor - timedelta(days=1),
                 friday=False,
                 start_date=start,
                 end_date=start + timedelta(hours=2),
@@ -990,9 +1104,9 @@ def _assign_keys(changes: list[dict[str, Any]], incidents: list[dict[str, Any]])
         row["key"] = f"SYN-INC-{index:04d}"
     incident_by_summary = {row["short_description"]: row["key"] for row in incidents}
     for row in incidents:
-        summary = row.pop("parent_summary", "")
+        summary = row.pop("caused_by_summary", "")
         if summary:
-            row["parent"] = by_summary[summary]
+            row["caused_by"] = by_summary[summary]
     for row in changes:
         trigger = row.pop("trigger_summary", "")
         if trigger:
@@ -1047,8 +1161,93 @@ def _check_shape(fixtures: dict[str, Any]) -> None:
         raise RuntimeError("users")
     if len(fixtures["task_ci"]) != 2400:
         raise RuntimeError(f"task_ci {len(fixtures['task_ci'])}")
+    if len(fixtures["templates"]) != 6:
+        raise RuntimeError("templates")
+    if any(row["parent"] for row in fixtures["incidents"]):
+        raise RuntimeError("incident.parent is not the caused-by link")
+    caused = [row for row in fixtures["incidents"] if row["caused_by"]]
+    if len(caused) != 74:
+        raise RuntimeError(f"caused_by {len(caused)}")
     if not 540 <= len(fixtures["relationships"]) <= 660:
         raise RuntimeError(f"relationships {len(fixtures['relationships'])}")
     keys = [row["key"] for row in changes]
     if len(keys) != len(set(keys)):
         raise RuntimeError("duplicate change keys")
+
+
+def _check_dates(
+    fixtures: dict[str, Any], anchor: datetime, history_start: datetime
+) -> None:
+    """Refuse an anchor that does not cover the fixed November 2025-October 2026 calendar.
+
+    Every opened_at is before the anchor. Completion timestamps are not later
+    than the anchor. Only an open change's planned start and end may fall in
+    the next 6 weeks.
+    """
+    # history_start is the anchor minus 365 days. The 2025.11.0 releases open
+    # one day before that when the anchor is 2026-10-27, so the lower bound is
+    # enforced on implemented non-release changes. Those are the P1-P6 rows.
+    # Every historical timestamp still has to be before the anchor.
+    latest = history_start
+    for row in fixtures["changes"]:
+        if row["kind"] == "open":
+            continue
+        for field in ("opened_at", "closed_at", "work_start", "work_end", "start_date", "end_date"):
+            moment = _stamp(row.get(field, ""))
+            if moment is not None:
+                latest = max(latest, moment)
+        if row["release"] or row["state"] != "3":
+            continue
+        opened = parse_utc(row["opened_at"])
+        if opened < history_start or opened >= anchor:
+            raise RuntimeError(
+                "anchor does not cover the fixed history calendar "
+                f"({row['key']} opened_at {row['opened_at']})"
+            )
+    for row in fixtures["incidents"]:
+        if row["state"] == "1":
+            continue
+        for field in ("opened_at", "resolved_at", "closed_at"):
+            moment = _stamp(row.get(field, ""))
+            if moment is not None:
+                latest = max(latest, moment)
+    if latest >= anchor:
+        raise RuntimeError(
+            "anchor does not cover the fixed history calendar "
+            f"(latest {format_utc(latest)})"
+        )
+    limit = anchor + OPEN_WINDOW
+    for row in fixtures["changes"]:
+        opened = parse_utc(row["opened_at"])
+        if opened >= anchor:
+            raise RuntimeError(f"{row['key']} opened_at is not before the anchor")
+        for field in ("closed_at", "work_end"):
+            moment = _stamp(row.get(field, ""))
+            if moment is not None and moment > anchor:
+                raise RuntimeError(f"{row['key']} {field} is later than the anchor")
+        if row["kind"] != "open":
+            continue
+        if row["work_start"] or row["work_end"] or row["closed_at"]:
+            raise RuntimeError(f"{row['key']} open change has a completion date")
+        start = parse_utc(row["start_date"])
+        end = parse_utc(row["end_date"])
+        if not (anchor < start <= limit and anchor < end <= limit):
+            raise RuntimeError(f"{row['key']} planned dates are outside the next 6 weeks")
+    for row in fixtures["incidents"]:
+        opened = parse_utc(row["opened_at"])
+        if opened >= anchor:
+            raise RuntimeError(f"{row['key']} opened_at is not before the anchor")
+        for field in ("resolved_at", "closed_at"):
+            moment = _stamp(row.get(field, ""))
+            if moment is None:
+                continue
+            if moment > anchor:
+                raise RuntimeError(f"{row['key']} {field} is later than the anchor")
+            if moment < opened:
+                raise RuntimeError(f"{row['key']} {field} is earlier than opened_at")
+
+
+def _stamp(text: str) -> datetime | None:
+    if not text:
+        return None
+    return parse_utc(text)

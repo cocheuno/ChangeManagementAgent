@@ -1,30 +1,54 @@
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 
-from cm_agents.data.generate import ANCHOR, HISTORY_START, SIGNATURES, generate, write_fixtures
+from cm_agents.data.generate import (
+    SIGNATURES,
+    AnchorError,
+    default_anchor,
+    generate,
+    parse_anchor,
+    write_fixtures,
+)
 from cm_agents.data.ground_truth import build_ground_truth
 from cm_agents.data.import_time import EASTERN, UTC
 
 pytestmark = pytest.mark.filterwarnings("ignore")
 
+FIXTURE_ANCHOR = datetime(2026, 10, 27, tzinfo=UTC)
+
 
 @pytest.fixture(scope="module")
 def fixtures() -> dict:
-    return generate(42)
+    return generate(42, anchor=FIXTURE_ANCHOR)
 
 
-def test_same_seed_is_byte_identical_and_another_seed_is_not(tmp_path) -> None:
-    first = generate(42)
-    second = generate(42)
+def test_same_seed_and_anchor_are_byte_identical(tmp_path) -> None:
+    first = generate(42, anchor=FIXTURE_ANCHOR)
+    second = generate(42, anchor=FIXTURE_ANCHOR)
     left = write_fixtures(first, tmp_path / "a")
     right = write_fixtures(second, tmp_path / "b")
     assert left == right
     assert (tmp_path / "a" / "fixtures.json").read_bytes() == (
         tmp_path / "b" / "fixtures.json"
     ).read_bytes()
-    assert write_fixtures(generate(7), tmp_path / "c") != left
+    assert write_fixtures(generate(7, anchor=FIXTURE_ANCHOR), tmp_path / "c") != left
+    other = FIXTURE_ANCHOR + timedelta(days=1)
+    assert write_fixtures(generate(42, anchor=other), tmp_path / "d") != left
+
+
+def test_default_anchor_is_utc_midnight_on_the_load_date() -> None:
+    anchor = default_anchor(datetime(2026, 10, 27, 15, 30, tzinfo=UTC))
+    assert anchor == datetime(2026, 10, 27, tzinfo=UTC)
+    assert parse_anchor("2026-10-27") == anchor
+    assert parse_anchor("2026-10-27 16:00:00") == datetime(2026, 10, 27, 16, 0, tzinfo=UTC)
+    with pytest.raises(AnchorError):
+        parse_anchor("27 Oct 2026")
+    today = default_anchor()
+    assert today.tzinfo is UTC
+    assert today.hour == today.minute == today.second == 0
+    assert today.date() == datetime.now(UTC).date()
 
 
 def test_volumes_and_prefixes(fixtures: dict) -> None:
@@ -65,18 +89,39 @@ def test_volumes_and_prefixes(fixtures: dict) -> None:
 
 
 def test_dates_stay_inside_the_fixed_window(fixtures: dict) -> None:
+    anchor = _parse(fixtures["anchor"])
+    history_start = _parse(fixtures["history_start"])
+    assert anchor == FIXTURE_ANCHOR
+    assert history_start == anchor - timedelta(days=365)
+    assert fixtures["anchor"] == "2026-10-27 00:00:00"
+    for row in fixtures["changes"] + fixtures["incidents"]:
+        for field in ("opened_at", "closed_at", "resolved_at", "work_end"):
+            if row.get(field):
+                assert _parse(row[field]) <= anchor
+        if row.get("opened_at"):
+            assert _parse(row["opened_at"]) < anchor
     for row in fixtures["changes"]:
         opened = _parse(row["opened_at"])
         if row["kind"] == "open":
-            assert opened >= ANCHOR
             assert row["work_start"] == ""
+            assert row["work_end"] == ""
+            start = _parse(row["start_date"])
+            end = _parse(row["end_date"])
+            assert anchor < start <= anchor + timedelta(days=42)
+            assert anchor < end <= anchor + timedelta(days=42)
             continue
-        assert HISTORY_START <= opened < ANCHOR
+        assert opened < anchor
+        if not row["release"]:
+            assert history_start <= opened
         if row["work_start"]:
-            assert HISTORY_START <= _parse(row["work_start"]) < ANCHOR
+            assert _parse(row["work_start"]) < anchor
+        if row.get("work_end"):
+            assert _parse(row["work_end"]) <= anchor
     closed = [row for row in fixtures["changes"] if row["state"] in {"3", "4"}]
     assert all(row["active"] is False for row in closed)
     assert all(row["approval"] == "approved" for row in fixtures["changes"] if row["state"] == "3")
+    with pytest.raises(RuntimeError, match="fixed history calendar"):
+        generate(42, anchor=datetime(2026, 10, 1, tzinfo=UTC))
 
 
 def test_patterns_are_within_three_points(fixtures: dict) -> None:
@@ -112,10 +157,11 @@ def test_patterns_are_within_three_points(fixtures: dict) -> None:
     linked = [row for row in emergencies if priority.get(row["parent"]) in {"1", "2"}]
     assert abs(100 * len(linked) / len(emergencies) - 70) <= 3
 
+    assert all(row["parent"] == "" for row in fixtures["incidents"])
     caused = {
-        row["parent"]
+        row["caused_by"]
         for row in fixtures["incidents"]
-        if row["parent"].startswith("SYN-CHG") or row["parent"].startswith("SYN-REL")
+        if row["caused_by"].startswith("SYN-CHG") or row["caused_by"].startswith("SYN-REL")
     }
     signatures = []
     for text, ci_class, group, _service in SIGNATURES:
@@ -157,9 +203,26 @@ def test_release_membership_and_ground_truth(fixtures: dict) -> None:
     assert truth["patterns"]["p1"]["payments_failure_pct"] == 20.0
     assert truth["patterns"]["p6"]["count"] == 12
     assert truth["metrics"]["release_on_time_pct"] == 85.0
-    assert truth["notes"]["caused_by"] == "incident.parent on this PDI"
+    assert truth["anchor"] == fixtures["anchor"]
+    assert truth["notes"]["caused_by"].startswith("recorded on the fixture only")
     assert truth["notes"]["risk_tier_selects_approver"] is False
     assert len(truth["standard_change_candidates"]) == 12
+    names = [row["name"] for row in fixtures["templates"]]
+    assert names == [
+        "SYN Standard rotate TLS certificate",
+        "SYN Standard OS patch on a non-PROD server",
+        "SYN Standard restart application service",
+        "SYN Standard scale out web tier node",
+        "SYN Standard update DNS CNAME",
+        "SYN Standard toggle a configuration flag",
+    ]
+    caused_rows = [row for row in fixtures["incidents"] if row["caused_by"]]
+    assert len(caused_rows) == 74
+    assert all(row["parent"] == "" for row in caused_rows)
+    for row in fixtures["templates"]:
+        for value in row.values():
+            assert "^" not in value
+            assert "=" not in value
 
 
 def _parse(text: str) -> datetime:
