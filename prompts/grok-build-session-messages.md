@@ -109,6 +109,55 @@ Decisions for Phase 1:
 Proceed with Phase 1 only, commit locally, and stop.
 ```
 
+**What came back:** the Phase 1 report, `docs/phase-reports/phase-1.md` (in Grok Build's Phase 1 commit). Its gate evidence was thorough: identical dry-run hashes; fixture and PDI counts equal; a second seed creating 0 records; teardown back to the pre-seed baseline; a clean reseed in 11.5 minutes; 74 tests passing. Review still found four problems and one gap, answered in message 4.
+
+---
+
+## Message 4: Phase 1 review, not accepted yet
+
+**When:** in the same Grok Build session, after reading the Phase 1 report.
+
+**Why:**
+- **Future dates.** Sample records were opened on 2026-10-23 and 2026-10-24, but were loaded on 2026-10-22. Records opened in the future break lead-time metrics and the "no lookahead" rule.
+- **The change that caused an incident** (`incident.caused_by`, which the report says doesn't exist). An out-of-box incident usually has a "Caused by Change" field. Repurposing `incident.parent` instead would mislead everything built on this data later, including the student's Problem Management work. Grok also changed §8.4 of the master prompt without approval.
+- **Normal change authority.** The report says normal changes only get assignment-group approval, at every risk tier. Normal changes usually also go to CAB at Authorize, so this needs evidence before the scenarios are changed to match.
+- **MTTR depends on `resolved_at`.** The sample records didn't show it.
+- **Standard change templates were 0 of 6.** ServiceNow's own route for creating templates (an approved proposal) hadn't been tried.
+
+```
+Phase 1 review: not accepted yet. The gate evidence is thorough, and the teardown baseline check and the Synaptics/SynthCore catch are exactly right. Fix these within Phase 1:
+
+1. Future dates. The samples show opened_at in the future: SYN-OPEN-16, SYN-OPEN-21 and SYN-OPEN-01 opened 2026-10-23 16:00:00, and SYN-INC-0159 opened 2026-10-24 16:00:00, but they were loaded on 2026-10-22. Nothing may be opened in the future.
+   - Report the anchor ("as of") date the generator uses and how it is chosen.
+   - Required: every historical date and every opened_at is before the load time. Only the planned dates of open changes may be in the future (the next 6 weeks).
+   - If byte-identical fixtures need a fixed anchor, make the anchor an explicit input (default: the load date, in UTC), record it in ground_truth.json and the manifest, and compare dry-run hashes for the same anchor.
+   - Add a unit test that no opened_at, closed_at, resolved_at or work_end is later than the anchor.
+
+2. incident.caused_by. An out-of-box incident usually has a "Caused by Change" reference field named caused_by, so "does not exist" needs evidence.
+   - Show the sys_dictionary results for name=incident^element=caused_by and for name=task^element=caused_by, and list every incident field whose reference table is change_request.
+   - Until I decide, don't use incident.parent for this link. parent means something else in the UI, and it would mislead the Problem Management work that will be built on this data.
+   - If caused_by really doesn't exist, list the options (for example incident.rfc, a custom reference field, or a task relationship) and stop for my decision.
+   - Revert your change to §8.4 of the master prompt until then.
+
+3. Normal change authority. The report says normal changes only get assignment-group approval at Assess, for every risk tier. Out of the box, normal changes usually also go to CAB Approval at Authorize.
+   - Walk two probe normal changes, one at risk Low and one at risk High, from New to Scheduled. Approve each step as the admin test helper.
+   - Show every approval record generated in each state (group, state, sys_created_on).
+   - Set change_authority in policy.yaml and the S02, S03 and S05 expectations from that evidence.
+   - Delete the probes and show that 0 residue remains.
+
+4. Resolved and closed incidents. MTTR needs resolved_at. Show the number of SYN incidents in Resolved or Closed with resolved_at empty (must be 0), and with resolved_at earlier than opened_at (must be 0).
+
+5. Standard change templates. Before accepting 0 of 6, try ServiceNow's own route for new templates: a Standard Change Template Proposal that creates the template once approved.
+   - If it works here with admin as the approver, and teardown can remove what it creates, create the 6 SYN templates that way and record them in the manifest.
+   - If it doesn't, record why, and name the existing template that S01 will use instead.
+
+Accepted as they are: 6 groups, a release as a normal change, freezes in policy code, the CI query rule, the schedule time zone, import sets left in the loading state, the integration user with sn_change_write only, and the new dependencies.
+
+Noted for Phase 2, no action now: Table API inserts into task_ci are blocked by "Change Model: Read only CI (Insert)". Verify that the Intake agent can add affected CIs to a new change through the Change API before relying on it.
+
+Rerun the full gate, update docs/phase-reports/phase-1.md, commit locally, and stop.
+```
+
 ---
 
 ## After every phase: review checklist
