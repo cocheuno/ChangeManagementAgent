@@ -158,6 +158,39 @@ Noted for Phase 2, no action now: Table API inserts into task_ci are blocked by 
 Rerun the full gate, update docs/phase-reports/phase-1.md, commit locally, and stop.
 ```
 
+**What came back:** Phase 1 committed as `26e3523`, with these results:
+- **Anchor date:** midnight UTC on the load date, recorded in the data files. Every `opened_at` is before it.
+- **Approvals:** normal changes get **two**, Change Management at Assess and CAB Approval at Authorize, at both Low and High risk. S02, S03 and S05 were corrected to match.
+- **MTTR data:** of 158 resolved or closed incidents, 0 lack `resolved_at`, and 0 were resolved before they opened.
+- **Standard change templates:** all 6 were created through Standard Change Template Proposals, and teardown removes them.
+- **The "Caused by Change" link:** no such field exists on the incident table. Grok stopped for a decision and reverted its edit to the master prompt.
+- **One new risk:** a OneDrive lock on `manifest.json` interrupted a load. It recovered.
+
+A check in the browser confirmed that `caused_by`, `rfc` and `problem_id` don't exist on incidents, although Problem Management is active. The instructor then created `incident.u_caused_by` by hand (setup guide, Part B8).
+
+---
+
+## Message 5: The "Caused by Change" decision, and safe manifest writes
+
+**When:** in the same session, after creating the field (setup guide, Part B8).
+
+**Why:**
+- ServiceNow must hold the link between an incident and the change that caused it. The change failure rate metric and scenario S07 both depend on it.
+- The mapping to `u_caused_by` is recorded in `docs/ASSUMPTIONS.md` rather than in the master prompt, which stays reusable.
+- Writing `manifest.json` atomically means a OneDrive lock can't leave it half-written.
+
+```
+Decision on incident.caused_by: I created a reference field on incident myself: column name u_caused_by, label "Caused by Change", reference change_request. Verify it in sys_dictionary and record it in docs/DISCOVERY.md item 9 as a human-made, approved customization.
+- Load the 74 caused-by links into incident.u_caused_by in seed, and add it to the field check and the gate counts (loaded=74, pdi=74).
+- teardown clears the values along with the SYN incidents and must not try to delete the field. Record that the field remains after teardown.
+- Use u_caused_by wherever the master prompt says caused_by (§6.6, §8.4, S07). Record that mapping in docs/ASSUMPTIONS.md; don't edit the master prompt.
+- Also record in docs/DISCOVERY.md whether incident.problem_id and incident.rfc exist on this instance, and whether the Problem Management plugin is active. Don't change anything for them.
+
+OneDrive lock: write manifest.json atomically (write a temporary file in the same folder, then replace the original) and retry briefly on a sharing violation. Add a unit test for it.
+
+Then rerun the full gate, update docs/phase-reports/phase-1.md, commit locally, and stop.
+```
+
 ---
 
 ## After every phase: review checklist

@@ -28,7 +28,9 @@ These are the values this project actually used. Your own instance will differ.
 | Exception role on `admin` | `snc_basic_auth_api_access`, granted 2026-10-21 (Part B5) |
 | Admin password | Changed inside the instance with **Set Password** on 2026-10-21 (Part B2). The developer portal's copy is out of date. |
 | Outbound email | Off: `glide.email.smtp.active` = false, and no active email account |
-| Plugins activated | None yet. Release Management is pending decision 1 for Phase 1 (Part B7). |
+| Plugins activated | None. No plugin here provides `rm_release`, so releases are normal changes (Part B7). |
+| Missing standard incident fields | `incident.caused_by`, `incident.rfc` and `incident.problem_id` don't exist, although Problem Management is active (Part B8) |
+| Custom fields | `incident.u_caused_by` (label "Caused by Change", reference to `change_request`), created by hand on 2026-10-29 (Part B8) |
 | Integration user | `syn.svc.change_agents`, created by `seed` in Phase 1 with **Web service access only** |
 | GitHub repository | `cocheuno/ChangeManagementAgent`. Branches: `main` (default), `grok-build` (Grok Build's work), `claude/kind-wozniak-yxtiaz` (where the prompts and these docs were written) |
 | Workstation | Windows 11, Python 3.12.6, uv 0.9.30 |
@@ -109,8 +111,32 @@ Only the setup commands (`doctor`, `discover`, `seed`, `teardown`) and test help
 | An HTML page instead of JSON | The instance is hibernating | Wake it from the developer portal and wait until it opens in the browser |
 | `500 Internal Server Error` mentioning `snow_adc` | ServiceNow's load balancer answered because the instance is waking, upgrading or unavailable | Check the instance status on the portal. Wait for **Online**, sign in in the browser, then retry |
 
-### B7. Plugins (pending)
-No plugin has been activated. Phase 0 found no `rm_release` table and no plugin named "Release Management". Decision 1 for Phase 1 ([`prompts/grok-build-session-messages.md`](../../prompts/grok-build-session-messages.md), message 3) asks Grok Build to find the plugin that provides `rm_release`. **You activate any plugin yourself; Grok Build never does.** When a plugin is activated, record its name, its ID and the date in the project record above.
+### B7. Plugins
+No plugin has been activated.
+- **Releases:** Phase 1 found that no plugin on this instance provides `rm_release`. The plugins that are present (`com.glide.releaseops`, `com.glide.releaseopsglobal`, `com.snc.release_management_read_roles`) don't create it. Each release is therefore a normal change named `SYN RELEASE <service> <version>`, and its member changes point to it through `parent`. The decision is in message 3 of [`prompts/grok-build-session-messages.md`](../../prompts/grok-build-session-messages.md).
+- **The rule:** you activate any plugin yourself; Grok Build never does. If you activate one, record its name, its ID and the date in the project record above.
+
+### B8. Add the "Caused by Change" field to incidents (done 2026-10-29)
+**Why:** this instance's incident table has none of the usual links to changes and problems: no `caused_by` (Caused by Change), no `rfc` (Change Request) and no `problem_id` (Problem). That's true even though the Problem Management plugin is active. This project needs "the change that caused this incident" for its change failure rate metric and for scenario S07. That makes it a human-approved customization, like the role in B5.
+
+1. **Confirm the fields are missing.** Signed in as `admin`, open:
+   `https://devNNNNN.service-now.com/sys_dictionary_list.do?sysparm_query=elementINcaused_by,rfc,problem_id`
+   On a typical instance this lists Caused by Change, Change Request and Problem on the incident table. This instance listed none of them.
+2. **Check whether Problem Management is active:**
+   `https://devNNNNN.service-now.com/v_plugin_list.do?sysparm_query=nameLIKEproblem`
+   On this instance it is active.
+3. **Create the field:**
+   1. Go to **All → System Definition → Tables**, search for `incident`, and open **Incident**.
+   2. On the **Columns** tab, click **New**.
+   3. Set **Type** to `Reference` and **Column label** to `Caused by Change`.
+   4. Set **Column name** to exactly `u_caused_by`. ServiceNow fills in `u_caused_by_change` from the label, so overwrite it.
+   5. On the **Reference Specification** tab, set **Reference** to `Change Request`.
+   6. Click **Submit**.
+4. **Check it:**
+   `https://devNNNNN.service-now.com/sys_dictionary_list.do?sysparm_query=element%3Du_caused_by`
+   **Expected:** one row on `incident`, of type Reference, pointing to `change_request`.
+
+The agents and metrics use `incident.u_caused_by` wherever the master prompt says `caused_by`; `docs/ASSUMPTIONS.md` records the mapping. `teardown` clears the values along with the synthetic incidents but leaves the field, because the API refuses to delete fields. To remove the field, delete its dictionary entry in the UI as `admin`.
 
 ---
 
