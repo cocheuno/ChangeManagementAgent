@@ -191,6 +191,65 @@ OneDrive lock: write manifest.json atomically (write a temporary file in the sam
 Then rerun the full gate, update docs/phase-reports/phase-1.md, commit locally, and stop.
 ```
 
+**What came back:** Phase 1 committed as `bc26fc4`.
+- **The links:** all 74 are loaded (`incident u_caused_by fixture=74 loaded=74 pdi=74 parent_used=0`), and teardown leaves the field in place.
+- **The mapping** is in `docs/ASSUMPTIONS.md`, and the master prompt was not edited. `incident.problem_id` and `incident.rfc` are confirmed absent.
+- **The manifest** is now written atomically, with a retry if the file is locked.
+- **Tests:** 79 passed.
+- **The final load:** 640 seconds, creating 5,095 records.
+- **Baseline drift:** a daily ServiceNow job kept adding non-SYN `task_ci` rows (281, then 313), which made one teardown check fail. Message 6 fixes that check.
+
+**Phase 1 accepted.**
+
+---
+
+## Message 6: Start Phase 2 (Change Enablement agents)
+
+**When:** in a new session, after Phase 1 is published (`git push`, then `git push origin grok-build:main`).
+
+**Why each addition to the master prompt's Phase 2 gate:**
+1. **Approvals:** this PDI has two approval steps for normal changes, so the S02 expectation of "exactly one authorization interrupt" has to be defined again.
+2. **Risk:** decision 4 from message 3 deferred the test that agent-written risk survives state transitions to this phase.
+3. **Affected CIs:** Phase 1 found that Table API inserts into `task_ci` are blocked, so the Change API route must be proven first.
+4. **Roles:** the integration user has one role, and Phase 2 may need more. Each must be justified, and admin and `itil` need your approval.
+5. **Model:** the plan-quality agreement test is where the model choice is checked. Changing the model changes cost, so that decision is yours.
+6. **Teardown check:** comparing table totals fails whenever ServiceNow's own daily job adds rows.
+7. **Cost:** Phase 2 is the first phase that calls the LLM in volume.
+
+```
+Context: this is a new Grok Build session. Phases 0 and 1 are complete and accepted (Phase 1 is bc26fc4 on grok-build, followed by my merge commits). Before doing anything, read:
+- prompts/grok-build-change-release-deployment-agents.md (the master prompt; follow it exactly)
+- docs/phase-reports/ (phase-0.md and phase-1.md), docs/DISCOVERY.md and docs/ASSUMPTIONS.md
+- docs/setup/PDI_AND_WORKSTATION_SETUP.md
+
+Environment on this PC:
+- .env in the repo root has all required settings. Load it at runtime; never print, log or commit its values.
+- Before every uv command, make sure UV_PROJECT_ENVIRONMENT is set; if it isn't, set it in that same command: $env:UV_PROJECT_ENVIRONMENT = Join-Path $env:LOCALAPPDATA 'venvs\ChangeManagementAgent'. Never create .venv inside the repository, and never hard-code absolute paths or user names.
+- Only one PC works on this repository at a time.
+First run uv sync, uv run pytest and uv run cm-agents doctor, and show the output. If anything fails, stop.
+
+Phase 2 is Change Enablement (master prompt §10, Phase 2). In addition to its gate:
+
+1. Approvals. On this PDI, a normal change gets Change Management approval at Assess and CAB Approval at Authorize, at every risk tier. An emergency change gets CAB Approval at Authorize (docs/DISCOVERY.md item 5).
+   - Decide whether the authorization interrupt fires once per approval step or once for the whole authorization, and explain why.
+   - Update the S02 expectation ("exactly one authorization interrupt") to match. Cite docs/DISCOVERY.md and list the change under Deviations.
+   - The test helper approves every step. Agents still never write approvals.
+
+2. Risk survives state transitions. Write change_request.risk and impact with a plain field update. Add the integration test from decision 4: the agent-written risk and impact survive every state transition up to Scheduled. Never call PATCH /api/sn_chg_rest/change/{sys_id}/risk or the Risk Calculator. If a transition recalculates risk, stop and report.
+
+3. Affected CIs. Table API inserts into task_ci are blocked. Before building on it, show that Intake can add affected CIs to a new change in state New through the Change API, running as the integration user.
+
+4. Roles. If the agents need roles beyond sn_change_write, add the minimum to seed, and list each role with the operation that needs it. Never grant admin or itil without asking me.
+
+5. Plan-quality agreement. If the LLM checklist agrees with the fixture labels on fewer than 90% of the 200 judgments, stop and report the results per checklist item. Don't change XAI_MODEL yourself.
+
+6. Teardown baseline. A daily ServiceNow job adds non-SYN task_ci rows (cert_follow_on_task), so comparing totals fails whenever it runs between seed and teardown. Change the check to compare the non-SYN rows created before the seed time (sys_created_on) with the baseline. Report rows created after the seed separately, without failing. Add a unit test.
+
+7. Cost. Report the total number of LLM calls and tokens for the gate run, taken from the audit log.
+
+Save the report as docs/phase-reports/phase-2.md, commit locally, and stop.
+```
+
 ---
 
 ## After every phase: review checklist
