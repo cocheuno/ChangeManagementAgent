@@ -163,6 +163,9 @@ def teardown(settings: Settings) -> int:
             if not _sweep(client, "sys_update_xml", UPDATE_XML_QUERY):
                 break
         _verify(client, baseline)
+        # incident.u_caused_by is a human-made column. Deleting the SYN
+        # incidents clears its values. This does not delete the column.
+        _require_caused_by_field(client)
     path.unlink()
     print("TEARDOWN OK", flush=True)
     return 0
@@ -593,6 +596,31 @@ def _delete_one(client: ServiceNowClient, table: str, sys_id: str) -> None:
                     return
                 raise TeardownError(str(retry)) from None
         raise TeardownError(str(exc)) from None
+
+
+def _require_caused_by_field(client: ServiceNowClient) -> None:
+    rows = client.get_table(
+        "sys_dictionary",
+        query="name=incident^element=u_caused_by",
+        fields=["element", "column_label", "internal_type", "reference", "active"],
+        limit=2,
+    )
+    if len(rows) != 1:
+        raise TeardownError(f"incident.u_caused_by dictionary count is {len(rows)}")
+    row = rows[0]
+    if (
+        row.get("internal_type") != "reference"
+        or row.get("reference") != "change_request"
+        or row.get("active") != "true"
+        or row.get("column_label") != "Caused by Change"
+    ):
+        raise TeardownError("incident.u_caused_by is not the approved change reference")
+    print(
+        "incident.u_caused_by remains "
+        f"element={row.get('element')} reference={row.get('reference')} "
+        f"label={row.get('column_label')} active={row.get('active')}",
+        flush=True,
+    )
 
 
 def _verify(client: ServiceNowClient, baseline: dict[str, object]) -> None:

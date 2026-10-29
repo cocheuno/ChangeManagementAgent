@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -18,19 +19,26 @@ def load_manifest(path: Path) -> dict[str, Any] | None:
 
 
 def save_manifest(path: Path, manifest: dict[str, Any]) -> None:
-    """Write the manifest. Retry when OneDrive briefly locks the file."""
+    """Write the manifest by replacing a temp file in the same folder.
+
+    A direct write can truncate manifest.json when OneDrive holds a share
+    lock. The temp file keeps the previous manifest intact until replace
+    succeeds. A sharing violation is retried briefly.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(manifest, indent=2, sort_keys=True) + "\n"
-    delay = 0.5
+    temporary = path.with_name(f"{path.name}.tmp")
+    delay = 0.2
     locked: PermissionError | None = None
-    for _ in range(8):
+    for _ in range(6):
         try:
-            path.write_text(payload, encoding="utf-8")
+            temporary.write_text(payload, encoding="utf-8")
+            os.replace(temporary, path)
             return
         except PermissionError as exc:
             locked = exc
             time.sleep(delay)
-            delay = min(delay * 2, 8.0)
+            delay = min(delay * 2, 1.0)
     if locked is not None:
         raise locked
 

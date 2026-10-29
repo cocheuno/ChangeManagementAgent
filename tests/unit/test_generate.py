@@ -204,7 +204,8 @@ def test_release_membership_and_ground_truth(fixtures: dict) -> None:
     assert truth["patterns"]["p6"]["count"] == 12
     assert truth["metrics"]["release_on_time_pct"] == 85.0
     assert truth["anchor"] == fixtures["anchor"]
-    assert truth["notes"]["caused_by"].startswith("recorded on the fixture only")
+    assert "incident.u_caused_by" in truth["notes"]["caused_by"]
+    assert "incident.parent is not used" in truth["notes"]["caused_by"]
     assert truth["notes"]["risk_tier_selects_approver"] is False
     assert len(truth["standard_change_candidates"]) == 12
     names = [row["name"] for row in fixtures["templates"]]

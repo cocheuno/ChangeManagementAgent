@@ -107,6 +107,9 @@ INCIDENT_FIELDS = (
     ("cmdb_ci", "reference", "cmdb_ci"),
     ("caller_id", "reference", "sys_user"),
     ("parent", "reference", "task"),
+    # Staging column is u_u_caused_by. The target field is the human-made
+    # incident.u_caused_by. Teardown does not delete that dictionary row.
+    ("u_caused_by", "reference", "change_request"),
     ("correlation_id", "string", "80"),
 )
 CHANGE_CHECK = (
@@ -140,6 +143,7 @@ INCIDENT_CHECK = (
     "parent",
     "cmdb_ci",
     "caller_id",
+    "u_caused_by",
     "number",
 )
 BASELINE_TABLES = (
@@ -646,6 +650,11 @@ def _import_history(
     ids.update(_index(client, "incident", INCIDENT, "correlation_id"))
     releases = [row for row in fixtures["changes"] if row["release"]]
     rest = [row for row in fixtures["changes"] if not row["release"]]
+    # Trigger incidents have to exist before an emergency change can point at
+    # them. Caused incidents point at a change through u_caused_by, so those
+    # changes have to exist first. The two incident waves are that split.
+    triggers = [row for row in fixtures["incidents"] if not row.get("caused_by")]
+    caused = [row for row in fixtures["incidents"] if row.get("caused_by")]
     _import_records(
         client,
         manifest,
@@ -665,7 +674,7 @@ def _import_history(
         path,
         incident_table,
         "incident",
-        fixtures["incidents"],
+        triggers,
         ids,
         groups,
         requester,
@@ -679,6 +688,19 @@ def _import_history(
         change_table,
         "change_request",
         rest,
+        ids,
+        groups,
+        requester,
+        cis,
+        verify=True,
+    )
+    _import_records(
+        client,
+        manifest,
+        path,
+        incident_table,
+        "incident",
+        caused,
         ids,
         groups,
         requester,
@@ -760,21 +782,20 @@ def _verify_imported(
     client: ServiceNowClient,
     target: str,
 ) -> None:
-    stored = client.get_record(
-        target,
-        ids[row["key"]],
-        fields=[
-            "number",
-            "opened_at",
-            "state",
-            "active",
-            "approval",
-            "parent",
-            "assignment_group",
-            "cmdb_ci",
-            "chg_model",
-        ],
-    )
+    fields = [
+        "number",
+        "opened_at",
+        "state",
+        "active",
+        "approval",
+        "parent",
+        "assignment_group",
+        "cmdb_ci",
+        "chg_model",
+    ]
+    if target == "incident":
+        fields.append("u_caused_by")
+    stored = client.get_record(target, ids[row["key"]], fields=fields)
     if stored.get("opened_at") != row["opened_at"]:
         raise SeedError(f"opened_at mismatch for {row['key']}: stored {stored.get('opened_at')}")
     if not values_match(row["state"], stored.get("state")):
@@ -793,6 +814,10 @@ def _verify_imported(
         raise SeedError(f"change model mismatch for {row['key']}")
     if row.get("parent") and stored.get("parent") != ids[row["parent"]]:
         raise SeedError(f"parent mismatch for {row['key']}")
+    if target == "incident":
+        wanted = ids[row["caused_by"]] if row.get("caused_by") else ""
+        if not values_match(wanted, stored.get("u_caused_by")):
+            raise SeedError(f"u_caused_by mismatch for {row['key']}")
 
 
 def _payload(
@@ -843,6 +868,11 @@ def _payload(
                 "caller_id": requester,
             }
         )
+        if row.get("caused_by"):
+            target_id = ids.get(row["caused_by"])
+            if not target_id:
+                raise SeedError(f"caused_by target is not loaded for {row['key']}")
+            values["u_caused_by"] = target_id
     if row.get("parent"):
         values["parent"] = ids[row["parent"]]
     return {f"u_{key}": value for key, value in values.items() if value != ""}
@@ -1162,6 +1192,7 @@ def stored_number_sentinel() -> str:
 def _expected_incident(row: dict[str, Any], ids: dict[str, str]) -> dict[str, object]:
     expected: dict[str, object] = {field: row.get(field, "") for field in INCIDENT_CHECK}
     expected["parent"] = ids[row["parent"]] if row.get("parent") else ""
+    expected["u_caused_by"] = ids[row["caused_by"]] if row.get("caused_by") else ""
     expected["number"] = stored_number_sentinel()
     return expected
 
@@ -1430,12 +1461,18 @@ def _print_gate(client: ServiceNowClient, fixtures: dict[str, Any]) -> None:
         mark = "yes" if within else "no"
         _say(f"{label} fixture={fixture_count} pdi={pdi_count} target={target} within={mark}")
     caused = sum(1 for row in incidents if row.get("caused_by"))
+    loaded = _count(client, "incident", f"{INCIDENT}^u_caused_byISNOTEMPTY")
+    linked = _count(
+        client,
+        "incident",
+        f"{INCIDENT}^u_caused_by.correlation_idSTARTSWITHSYN-",
+    )
     parent_used = _count(client, "incident", f"{INCIDENT}^parentISNOTEMPTY")
     _say(
-        f"incident caused_by fixture={caused} loaded=0 "
-        f"pdi_parent={parent_used} decision=open"
+        f"incident u_caused_by fixture={caused} loaded={loaded} "
+        f"pdi={linked} parent_used={parent_used}"
     )
-    if parent_used:
+    if caused != 74 or loaded != caused or linked != caused or parent_used:
         failed = True
     resolved_query = f"{INCIDENT}^stateIN6,7"
     resolved_closed = _count(client, "incident", resolved_query)
@@ -1492,6 +1529,7 @@ def _print_samples(client: ServiceNowClient, fixtures: dict[str, Any]) -> None:
         "resolved_at",
         "closed_at",
         "close_code",
+        "u_caused_by",
         "short_description",
     ]
     for key in fixtures["samples"]["changes"]:

@@ -1,6 +1,7 @@
 import pytest
 
-from cm_agents.data.queries import OWNED_MEMBERSHIP_GROUPS
+from cm_agents.data.load import INCIDENT_CHECK, INCIDENT_FIELDS
+from cm_agents.data.queries import DICTIONARY, OWNED_MEMBERSHIP_GROUPS
 from cm_agents.data.teardown import (
     ARTIFACT_ORDER,
     SWEEPS_AFTER_USERS,
@@ -59,6 +60,13 @@ def test_affected_cis_are_removed_with_the_change() -> None:
         index for index, (table, _query) in enumerate(SWEEPS_BEFORE_USERS) if table == "task_ci"
     )
     assert last_change < task_ci
+
+
+def test_teardown_does_not_delete_the_human_caused_by_field() -> None:
+    assert "name=incident" not in DICTIONARY
+    assert "u_caused_by" not in DICTIONARY
+    assert ("u_caused_by", "reference", "change_request") in INCIDENT_FIELDS
+    assert "u_caused_by" in INCIDENT_CHECK
 
 
 def test_staging_table_is_dropped_before_its_dictionary_rows() -> None:

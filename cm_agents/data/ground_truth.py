@@ -69,8 +69,8 @@ def build_ground_truth(fixtures: dict[str, Any]) -> dict[str, Any]:
         "standard_change_candidates": [row["signature"] for row in candidates],
         "notes": {
             "caused_by": (
-                "recorded on the fixture only; this PDI has no incident.caused_by "
-                "field and incident.parent is not used"
+                "fixture field caused_by is stored in incident.u_caused_by; "
+                "incident.parent is not used"
             ),
             "patterns_exclude_releases": True,
             "risk_tier_selects_approver": False,
