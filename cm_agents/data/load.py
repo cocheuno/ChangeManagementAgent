@@ -8,7 +8,7 @@ the Change API.
 from __future__ import annotations
 
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -238,7 +238,9 @@ def _prepare_manifest(
     if client.count("change_request", CHANGE):
         raise SeedError("teardown first")
     baseline = {table: client.count(table) for table in BASELINE_TABLES}
-    manifest = new_manifest(seed, baseline, anchor)
+    # One second after the instance clock so every row in the counts is older.
+    seeded_at = (client.server_time() + timedelta(seconds=1)).strftime("%Y-%m-%d %H:%M:%S")
+    manifest = new_manifest(seed, baseline, anchor, seeded_at=seeded_at)
     save_manifest(path, manifest)
     return manifest
 

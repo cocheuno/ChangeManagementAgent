@@ -10,10 +10,13 @@ import base64
 import logging
 import time
 from collections.abc import Callable
+from datetime import datetime
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 import httpx
 
+from cm_agents.data.import_time import UTC
 from cm_agents.settings import assert_pdi_url, redact_text
 
 logger = logging.getLogger(__name__)
@@ -236,6 +239,28 @@ class ServiceNowClient:
         if not isinstance(stats, dict) or "count" not in stats:
             raise ServiceNowError(f"Count on {table} did not return a count")
         return int(stats["count"])
+
+    def server_time(self) -> datetime:
+        """UTC time from the instance Date header, after this response was sent."""
+        response = self._http.request(
+            "GET",
+            "/api/now/table/sys_properties",
+            params={
+                "sysparm_query": "name=glide.war",
+                "sysparm_fields": "name",
+                "sysparm_limit": "1",
+            },
+        )
+        kind = response.headers.get("content-type", "").lower()
+        if response.status_code >= 400 or "html" in kind:
+            raise ServiceNowError(
+                f"ServiceNow returned HTTP {response.status_code} for the instance clock",
+                response.status_code,
+            )
+        header = response.headers.get("date")
+        if not header:
+            raise ServiceNowError("ServiceNow did not return a Date header")
+        return parsedate_to_datetime(header).astimezone(UTC).replace(microsecond=0)
 
     def _interpret(self, response: httpx.Response) -> dict[str, Any]:
         if 300 <= response.status_code < 400:

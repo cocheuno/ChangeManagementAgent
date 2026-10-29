@@ -1,0 +1,21 @@
+requester: SYN Service Desk
+summary: SYN Payments schema update on the shared cluster
+description: Apply the approved schema update to the shared production database.
+cis:
+  - syn-shared-sqlclu-prd-01
+justification: The Payments schema update is required for the next statement cycle.
+deployment_method: automated
+implementation_plan: |
+  Deployment method: AUTOMATED
+  1. Owner: SYN Payments DevOps. Apply the schema update.
+  2. Restart the database listener.
+backout_plan: |
+  1. Stop the service.
+  2. Restore the previous build.
+  Trigger: the health check fails. Backout duration: 20 minutes.
+test_plan: |
+  1. Call the health endpoint.
+  Success criteria: HTTP 200 and error rate under 1 percent.
+proposed_start: "2026-11-08 03:00:00"
+proposed_end: "2026-11-08 05:00:00"
+simulated_now: "2026-10-29 16:00:00"

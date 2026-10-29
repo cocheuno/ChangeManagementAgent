@@ -162,7 +162,8 @@ def teardown(settings: Settings) -> int:
         for _ in range(4):
             if not _sweep(client, "sys_update_xml", UPDATE_XML_QUERY):
                 break
-        _verify(client, baseline)
+        seeded_at = manifest.get("seeded_at")
+        _verify(client, baseline, seeded_at if isinstance(seeded_at, str) and seeded_at else None)
         # incident.u_caused_by is a human-made column. Deleting the SYN
         # incidents clears its values. This does not delete the column.
         _require_caused_by_field(client)
@@ -623,7 +624,27 @@ def _require_caused_by_field(client: ServiceNowClient) -> None:
     )
 
 
-def _verify(client: ServiceNowClient, baseline: dict[str, object]) -> None:
+def baseline_lines(
+    table: str, baseline: int, before_seed: int, after_seed: int
+) -> tuple[bool, str]:
+    """Pass only when rows created before the seed still match the baseline.
+
+    Rows created after the seed, including the daily cert_follow_on_task job,
+    are reported and do not fail the check.
+    """
+    ok = before_seed == int(baseline)
+    text = (
+        f"{table} before_seed={before_seed} baseline={baseline} "
+        f"created_after_seed={after_seed}"
+    )
+    return ok, text
+
+
+def _verify(
+    client: ServiceNowClient,
+    baseline: dict[str, object],
+    seeded_at: str | None = None,
+) -> None:
     failed = False
     for table, query in SYN_LEFT:
         try:
@@ -635,9 +656,18 @@ def _verify(client: ServiceNowClient, baseline: dict[str, object]) -> None:
                 raise
         print(f"{table} syn={count}", flush=True)
         failed = failed or count != 0
-    for table, expected in baseline.items():
-        actual = client.count(str(table))
-        print(f"{table} total={actual} baseline={expected}", flush=True)
-        failed = failed or actual != int(expected)
+    if not seeded_at:
+        print("seeded_at is missing; comparing totals", flush=True)
+        for table, expected in baseline.items():
+            actual = client.count(str(table))
+            print(f"{table} total={actual} baseline={expected}", flush=True)
+            failed = failed or actual != int(expected)
+    else:
+        for table, expected in baseline.items():
+            before = client.count(str(table), f"sys_created_on<{seeded_at}")
+            after = client.count(str(table), f"sys_created_on>={seeded_at}")
+            ok, text = baseline_lines(str(table), int(expected), before, after)
+            print(text, flush=True)
+            failed = failed or not ok
     if failed:
         raise TeardownError("synthetic rows remain or a baseline count changed")

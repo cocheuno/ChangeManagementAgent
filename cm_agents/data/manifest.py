@@ -43,8 +43,13 @@ def save_manifest(path: Path, manifest: dict[str, Any]) -> None:
         raise locked
 
 
-def new_manifest(seed: int, baseline: dict[str, int], anchor: str) -> dict[str, Any]:
-    return {
+def new_manifest(
+    seed: int,
+    baseline: dict[str, int],
+    anchor: str,
+    seeded_at: str | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
         "seed": seed,
         "anchor": anchor,
         "baseline": baseline,
@@ -56,6 +61,9 @@ def new_manifest(seed: int, baseline: dict[str, int], anchor: str) -> dict[str, 
         "field_maps": [],
         "update_xml": [],
     }
+    if seeded_at:
+        payload["seeded_at"] = seeded_at
+    return payload
 
 
 def add_record(manifest: dict[str, Any], table: str, sys_id: str, key: str) -> None:

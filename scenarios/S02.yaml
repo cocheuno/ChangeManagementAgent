@@ -1,0 +1,21 @@
+requester: SYN Service Desk
+summary: SYN HR Portal configuration change
+description: Update the HR Portal banner text for the open enrollment notice.
+cis:
+  - syn-hr-portal
+justification: The banner is wrong for the current enrollment window.
+deployment_method: automated
+implementation_plan: |
+  Deployment method: AUTOMATED
+  1. Owner: SYN Platform Ops. Apply the banner text.
+  2. Restart the portal node.
+backout_plan: |
+  1. Stop the service.
+  2. Restore the previous build.
+  Trigger: the health check fails. Backout duration: 20 minutes.
+test_plan: |
+  1. Call the health endpoint.
+  Success criteria: HTTP 200 and error rate under 1 percent.
+proposed_start: "2026-11-11 01:00:00"
+proposed_end: "2026-11-11 03:00:00"
+simulated_now: "2026-10-29 16:00:00"
