@@ -311,6 +311,54 @@ Phase 3 is Deployment and Review for standalone changes (master prompt §10, Pha
 Save the report as docs/phase-reports/phase-3.md, commit locally, and stop.
 ```
 
+**What came back:** Phase 3 committed as `d8011ca`. The five live scenarios passed (S01, S02, S03, S05, S07), and S07 rolled back after its canary failed, with no later PROD deployment.
+- **Roles:** `sn_change_write`, `audit_viewer` (to read journal entries; `itil` couldn't) and `sn_incident_write` (so urgency can produce a P1).
+- **Scenario records:** marked by a `correlation_id` prefix and excluded from metrics. The Phase 2 leftovers were removed.
+- **Cost:** 16 LLM calls and 50,611 tokens.
+- **Found during review:**
+  - the unit suite grew only from 93 to 95, although the gate requires simulator tests for each strategy;
+  - the seeded maintenance spans are evaluated as UTC in ServiceNow, so its tier-1 window sits five hours early;
+  - the evidence for S07's incident, S03's rejection reason and the PIR files wasn't shown.
+
+---
+
+## Message 8: Phase 3 review, not accepted yet
+
+**When:** in the same session, after reading the Phase 3 report.
+
+**Why:**
+- **Tests:** the deterministic core (simulator strategies, deployment preconditions, close-code and PIR rules) needs tests that run without ServiceNow or the LLM.
+- **Maintenance windows:** ServiceNow is the system of record, so its maintenance window must match policy. Otherwise the change schedule and conflict results shown in ServiceNow are wrong for anyone reading them there.
+- **Evidence:** the scenarios' key outcomes must be shown, not assumed.
+
+```
+Phase 3 review: not accepted yet. The five scenarios, the role tests, the scenario-record rule and the cleanup are good. Fix these within Phase 3:
+
+1. Unit tests. The master prompt's Phase 3 gate requires simulator unit tests for each strategy, but the unit suite only grew from 93 to 95. Add deterministic unit tests, with no network and no LLM, for:
+   - each strategy (canary, blue/green, rolling, big bang): success, an injected failure, and rollback;
+   - the Deployment agent's preconditions, including no automatic retry after a PROD failure;
+   - the Review agent's close-code rules and its PIR-required rule.
+   List the test names in the report.
+
+2. Maintenance schedules in ServiceNow. The seeded spans are evaluated as UTC, so ServiceNow's tier-1 window is Saturday 17:00 to 23:00 Eastern instead of 22:00 to 04:00. The policy check is right, but the record is wrong, and ServiceNow is the system of record: anyone looking at the change schedule or conflict results there sees the wrong window.
+   - Fix seed so that both schedules match policy in Eastern time, including across daylight saving time.
+   - Prove it with ServiceNow's conflict check on four probe changes on syn-shared-sqlclu-prd-01: Saturday 22:00 Eastern and Saturday 17:00 Eastern, each on a date in November and on a date in June. Only the 22:00 probes may be free of not_in_maintenance_window.
+   - Update the existing spans in place if seed can do that idempotently; otherwise reseed. Delete the probes and show that 0 residue remains.
+   - Keep policy code as the governing check. Record the cause and the fix in docs/DISCOVERY.md.
+
+3. Evidence missing from your summary. Show from the gate output:
+   (a) S07's incident, with u_caused_by pointing to the S07 change, and its priority;
+   (b) S03's CAB rejection reason, as read from the approval comments and recorded by Review;
+   (c) the PIR files for S05 and S07, with their required sections present.
+
+Accepted as they are:
+- The roles sn_change_write, audit_viewer and sn_incident_write. Record in docs/ASSUMPTIONS.md that a production design would read journal entries through the record's work_notes and comments fields, rather than through a cross-table audit role.
+- S03 returning to New after rejection. That is ServiceNow's standard behavior: the change goes back to the requester for rework.
+- The scenario-record rule, and ServiceNow's "Blackout Wednesdays" schedule moving S02. Record that this blackout schedule comes from ServiceNow's demo data.
+
+Rerun the unit tests and the live gate, update docs/phase-reports/phase-3.md, commit locally, and stop.
+```
+
 ---
 
 ## After every phase: review checklist
