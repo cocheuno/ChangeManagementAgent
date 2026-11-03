@@ -31,6 +31,8 @@ These are the values this project actually used. Your own instance will differ.
 | Plugins activated | None. No plugin here provides `rm_release`, so releases are normal changes (Part B7). |
 | Missing standard incident fields | `incident.caused_by`, `incident.rfc` and `incident.problem_id` don't exist, although Problem Management is active (Part B8) |
 | Custom fields | `incident.u_caused_by` (label "Caused by Change", reference to `change_request`), created by hand on 2026-10-29 (Part B8) |
+| Built-in settings changed by `seed` | `change.conflict.ci_maint_sched` set to `true`, and the demo **Global Infrastructure** maintenance schedule limited to non-synthetic CIs (Phase 3; Part B9) |
+| Integration user roles | `sn_change_write`, `audit_viewer` (reads work notes and approval comments; `itil` couldn't), `sn_incident_write` (lets urgency produce a P1) (Phase 3) |
 | Integration user | `syn.svc.change_agents`, created by `seed` in Phase 1 with **Web service access only** |
 | GitHub repository | `cocheuno/ChangeManagementAgent`. Branches: `main` (default), `grok-build` (Grok Build's work), `claude/kind-wozniak-yxtiaz` (where the prompts and these docs were written) |
 | Workstation | Windows 11, Python 3.12.6, uv 0.9.30 |
@@ -137,6 +139,26 @@ No plugin has been activated.
    **Expected:** one row on `incident`, of type Reference, pointing to `change_request`.
 
 The agents and metrics use `incident.u_caused_by` wherever the master prompt says `caused_by`; `docs/ASSUMPTIONS.md` records the mapping. `teardown` clears the values along with the synthetic incidents but leaves the field, because the API refuses to delete fields. To remove the field, delete its dictionary entry in the UI as `admin`.
+
+### B9. Conflict detection settings changed by `seed` (Phase 3, approval pending)
+**Why:** ServiceNow flagged the Saturday-night tier-1 window as "not in maintenance window". In Phase 3, Grok Build found two causes:
+- the property `change.conflict.ci_maint_sched` was `false`, so ServiceNow ignored each CI's own maintenance schedule;
+- the demo schedule **Global Infrastructure** (Saturday 01:00–04:00, with an empty condition, so it applies to every CI) produced the flag instead.
+
+`seed` now makes two changes:
+
+| What | Original value | Value set by `seed` |
+|---|---|---|
+| System property `change.conflict.ci_maint_sched` | `false` | `true` |
+| Condition on the **Global Infrastructure** maintenance schedule | empty | `nameNOT LIKEsyn-`, so the demo schedule no longer applies to synthetic CIs |
+
+**Check:** ServiceNow's conflict check clears a probe at Saturday 22:00 Eastern and flags one at Saturday 17:00 Eastern, in both November and June.
+
+Grok Build made these changes without asking first. Changing built-in configuration needs approval under the master prompt's rules, and this approval was requested in Phase 4 (message 9 in `prompts/grok-build-session-messages.md`). Once approved, both changes are recorded in the manifest with their original values, and `teardown` restores them.
+
+**To revert by hand:**
+1. Open `https://devNNNNN.service-now.com/sys_properties_list.do?sysparm_query=name%3Dchange.conflict.ci_maint_sched` and set the value back to `false`.
+2. Open the **Global Infrastructure** schedule and clear its condition.
 
 ---
 
