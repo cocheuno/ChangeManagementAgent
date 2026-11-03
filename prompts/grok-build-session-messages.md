@@ -427,6 +427,66 @@ Phase 4 is Release Management (master prompt §10, Phase 4). Releases follow dec
 Save the report as docs/phase-reports/phase-4.md, commit locally, and stop.
 ```
 
+**What came back:** Phase 4 committed as `2d80983`.
+- **Tests:** 138 unit tests passed.
+- **S06 passed:**
+  - the readiness gate failed first while one member was still awaiting authorization;
+  - the release change then went through Change Management at Assess and CAB Approval at Authorize, then the go/no-go;
+  - DEV, TEST, STAGE and PROD each recorded `result=passed` on the release change;
+  - the four members closed `successful`, with close notes naming the release change;
+  - the release notes have their three sections.
+- **Release history:** ServiceNow and `ground_truth.json` agree that 17 of 20 seeded releases were on time.
+- **Cost:** 7 LLM calls and 17,177 tokens.
+- **New finding:** ServiceNow's normal change model adds its own Implement and Post-implementation-testing tasks on the way into Implement, and leaves them Canceled. The agent can't delete them (HTTP 403).
+
+**Phase 4 accepted,** once the report showed the restore unit tests for the two approved settings.
+
+---
+
+## Message 10: Start Phase 5 (Metrics and continual improvement)
+
+**When:** in a new session, after Phase 4 is published.
+
+**Why each addition to the master prompt's Phase 5 gate:**
+1. **Population and period:** "equals the ground truth exactly" only means something if both sides count the same records over the same period. That has to be written down before any number is computed. The period must end at the fixture anchor, not at the day the report runs.
+2. **Independence:** if the metrics code and the ground-truth code share formulas, a matching result proves nothing.
+3. **Numbers in the commentary:** the LLM must not invent or alter a figure.
+4. **Standard change candidates:** continual improvement proposes; a human decides.
+5. **The change model's own tasks** must not leak into any count.
+
+```
+Context: this is a new Grok Build session. Phases 0 to 4 are complete and accepted (Phase 4 is 2d80983 on grok-build, followed by my merge commits). Before doing anything, read:
+- prompts/grok-build-change-release-deployment-agents.md (the master prompt; follow it exactly)
+- docs/phase-reports/ (phase-0.md to phase-4.md), docs/DISCOVERY.md and docs/ASSUMPTIONS.md
+- docs/setup/PDI_AND_WORKSTATION_SETUP.md
+
+Environment on this PC:
+- .env in the repo root has all required settings. Load it at runtime; never print, log or commit its values.
+- Before every uv command, make sure UV_PROJECT_ENVIRONMENT is set; if it isn't, set it in that same command: $env:UV_PROJECT_ENVIRONMENT = Join-Path $env:LOCALAPPDATA 'venvs\ChangeManagementAgent'. Never create .venv inside the repository, and never hard-code absolute paths or user names.
+- Only one PC works on this repository at a time.
+First run uv sync, uv run pytest and uv run cm-agents doctor, and show the output. If anything fails, stop.
+
+Phase 5 is Metrics and continual improvement (master prompt §10, Phase 5). The §8.4 definitions are binding, with incident.u_caused_by in place of caused_by (docs/ASSUMPTIONS.md). In addition to the gate:
+
+1. Population and period. Before computing anything, write down in docs/ASSUMPTIONS.md exactly which records each metric counts. Use that same rule in the metrics code and in ground_truth.json:
+   - only seed records (counts_in_metrics), never scenario records or ServiceNow's own demo records;
+   - whether the 20 release changes count in the change metrics, and whether the four 2025.11.0 releases that open before history_start fall inside the period;
+   - the period: S09 covers the 12 months ending at the fixture anchor (2026-10-27 00:00 UTC), not the date the report runs. Add explicit --from and --to options, so the same report can be reproduced on any day.
+   If ground_truth.json and ServiceNow disagree, change neither until you have found which one is wrong against §8.4. Report the disagreement with both values.
+
+2. Independence. The metrics code computes every number from ServiceNow, and must not import or share formula code with the generator that wrote ground_truth.json; otherwise a match proves nothing. Rounding helpers may be shared. Show the import lists of both modules.
+
+3. Numbers in the commentary. The LLM writes the commentary only. Add a check that every number in the commentary appears in the computed metrics table; if one doesn't, the report fails. Add a unit test with a commentary that cites a number not in the table.
+
+4. Standard change candidates. Propose them only; don't create templates or proposals. For each candidate, show its signature, executions, failures, caused incidents and a proposed template name.
+
+5. The change model's own tasks. Confirm that no metric counts the Canceled Implement and Post-implementation-testing tasks the change model adds, and that teardown removes them along with their changes (Phase 6 proves this in a full cycle).
+
+6. Cost. Report the total number of LLM calls and tokens for the gate run, taken from the audit log.
+
+Save the report as docs/phase-reports/phase-5.md, commit locally, and stop.
+```
+
 ---
 
 ## After every phase: review checklist
