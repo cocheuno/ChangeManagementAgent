@@ -525,7 +525,20 @@ def _ensure_schedules(
         found[name] = sys_id
         for span in schedule["spans"]:
             _ensure_span(client, manifest, path, sys_id, span)
+    _ensure_conflict_uses_ci_schedule(client)
     return found
+
+
+def schedule_span_clock(compact: str) -> str:
+    """Return the compact clock stored on cmn_schedule_span.
+
+    The fixture value is an America/New_York wall time. ServiceNow stores that
+    clock as written and applies the schedule time zone, including daylight
+    saving, when it evaluates the span. Converting it to UTC first makes
+    Saturday 22:00 Eastern fall outside the window in June.
+    """
+    datetime.strptime(compact, "%Y%m%dT%H%M%S")
+    return compact
 
 
 def _ensure_span(
@@ -535,29 +548,113 @@ def _ensure_span(
     schedule_id: str,
     span: dict[str, str],
 ) -> None:
+    body = {
+        "name": span["name"],
+        "schedule": schedule_id,
+        "start_date_time": schedule_span_clock(span["start_date_time"]),
+        "end_date_time": schedule_span_clock(span["end_date_time"]),
+        "repeat_type": span["repeat_type"],
+        "repeat_count": "1",
+        "days_of_week": span["days_of_week"],
+        "all_day": "false",
+        "float_day": "",
+        "float_week": "",
+        "yearly_type": "",
+    }
     rows = client.get_table(
         "cmn_schedule_span",
         query=f"name={span['name']}^schedule={schedule_id}",
-        fields=["sys_id"],
+        fields=["sys_id", *body.keys()],
         limit=1,
     )
     if rows:
+        current = rows[0]
+        if _span_matches(current, body):
+            return
+        client.update_record("cmn_schedule_span", str(current["sys_id"]), body)
+        stored = client.get_record(
+            "cmn_schedule_span", str(current["sys_id"]), fields=list(body.keys())
+        )
+        if not _span_matches(stored, body):
+            raise SeedError(f"schedule span did not keep the Eastern wall clock: {span['name']}")
         return
-    created = client.create_record(
-        "cmn_schedule_span",
-        {
-            "name": span["name"],
-            "schedule": schedule_id,
-            "start_date_time": span["start_date_time"],
-            "end_date_time": span["end_date_time"],
-            "repeat_type": span["repeat_type"],
-            "repeat_count": "1",
-            "days_of_week": span["days_of_week"],
-            "all_day": "false",
-        },
+    created = client.create_record("cmn_schedule_span", body)
+    stored = client.get_record(
+        "cmn_schedule_span", str(created["sys_id"]), fields=list(body.keys())
     )
+    if not _span_matches(stored, body):
+        raise SeedError(f"schedule span did not keep the Eastern wall clock: {span['name']}")
     add_record(manifest, "cmn_schedule_span", str(created["sys_id"]), span["name"])
     save_manifest(path, manifest)
+
+
+def _ensure_conflict_uses_ci_schedule(client: ServiceNowClient) -> None:
+    """Make conflict results use the CI schedule, not the demo window.
+
+    change.conflict.ci_maint_sched defaults to false, so the checker ignores
+    maintenance_schedule on the CI. Global Infrastructure is a demo conditional
+    schedule with an empty condition, so it applies to every CI and flags
+    anything outside Saturday 01:00-04:00. A SYN CI is excluded from that demo
+    schedule. The seeded span stays the Eastern wall clock.
+    """
+    rows = client.get_table(
+        "sys_properties",
+        query="name=change.conflict.ci_maint_sched",
+        fields=["sys_id", "value"],
+        limit=1,
+    )
+    if len(rows) != 1:
+        raise SeedError("change.conflict.ci_maint_sched was not found")
+    if str(rows[0].get("value") or "").lower() != "true":
+        client.update_record("sys_properties", str(rows[0]["sys_id"]), {"value": "true"})
+        stored = client.get_record(
+            "sys_properties", str(rows[0]["sys_id"]), fields=["value"]
+        )
+        if str(stored.get("value") or "").lower() != "true":
+            raise SeedError("change.conflict.ci_maint_sched did not stay true")
+    demo = client.get_table(
+        "cmn_schedule_maintenance",
+        query="name=Global Infrastructure",
+        fields=["sys_id", "condition"],
+        limit=2,
+    )
+    if len(demo) != 1:
+        raise SeedError("Global Infrastructure maintenance schedule was not found")
+    condition = str(demo[0].get("condition") or "")
+    if "syn-" in condition.casefold():
+        return
+    if condition.strip():
+        raise SeedError("Global Infrastructure already has a condition")
+    client.update_record(
+        "cmn_schedule_maintenance",
+        str(demo[0]["sys_id"]),
+        {"condition": "nameNOT LIKEsyn-"},
+    )
+    updated = client.get_record(
+        "cmn_schedule_maintenance", str(demo[0]["sys_id"]), fields=["condition"]
+    )
+    if "syn-" not in str(updated.get("condition") or "").casefold():
+        raise SeedError("Global Infrastructure condition did not exclude SYN CIs")
+
+
+def _span_matches(stored: dict[str, Any], body: dict[str, str]) -> bool:
+    for key, expected in body.items():
+        actual = stored.get(key)
+        if key in {"start_date_time", "end_date_time"}:
+            if _normalize_span(actual) != expected:
+                return False
+            continue
+        if not values_match(expected, actual):
+            return False
+    return True
+
+
+def _normalize_span(value: object) -> str:
+    text = str(value or "").strip()
+    if len(text) >= 19 and text[4] == "-" and text[10] == " ":
+        parsed = datetime.strptime(text[:19], "%Y-%m-%d %H:%M:%S")
+        return parsed.strftime("%Y%m%dT%H%M%S")
+    return text
 
 
 def _ensure_cis(

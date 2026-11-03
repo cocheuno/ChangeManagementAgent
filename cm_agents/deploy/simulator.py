@@ -177,15 +177,20 @@ def run_rollback(
             "replayed": False,
         }
     else:
-        previous = str((state.get("previous") or {}).get(key) or "")
         versions = dict(state.get("versions") or {})
-        versions[key] = previous
-        state["versions"] = versions
+        installed = str(versions.get(key) or "")
+        deploy_outcome = str(existing.get("outcome") or "") if isinstance(existing, dict) else ""
+        if deploy_outcome == "failed":
+            restored = installed
+        else:
+            restored = str((state.get("previous") or {}).get(key) or "")
+            versions[key] = restored
+            state["versions"] = versions
         result = {
             "outcome": "rolled_back",
             "environment": env,
             "ci": ci,
-            "version": previous,
+            "version": restored,
             "after": dict(HEALTHY),
             "replayed": False,
         }

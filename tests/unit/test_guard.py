@@ -13,7 +13,7 @@ def test_injection_markers_match_the_s08_sentence() -> None:
 
 
 def test_maintenance_flag_does_not_block_and_overlap_still_does() -> None:
-    # The stored span is UTC, so this flag is raised for a policy Saturday window.
+    # Policy governs the window. The OOB maintenance flag is not a block.
     assert blocks_schedule("not_in_maintenance_window", "normal") is False
     assert blocks_schedule("not_in_maintenance_window", "standard") is False
     assert blocks_schedule("ci_already_scheduled", "normal") is True

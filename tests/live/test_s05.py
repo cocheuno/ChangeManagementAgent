@@ -6,9 +6,9 @@ import uuid
 
 from cm_agents.servicenow.changes import exact_ci, find_by_correlation, find_incident, read_change
 from cm_agents.servicenow.client import ServiceNowClient
-from cm_agents.settings import load_settings, repo_root
+from cm_agents.settings import load_settings
 from tests.helpers.approve_as_human import approve_pending_once
-from tests.live.support import fields, run_cli, start_scenario
+from tests.live.support import fields, print_pir, run_cli, start_scenario
 
 TRIGGER = "SYN-SCN-S05-trigger"
 
@@ -59,8 +59,7 @@ def test_s05_emergency_closes_after_cab_approval() -> None:
         assert str(current.get("state")) == "3"
         assert str(current.get("close_code")) == "successful"
         number = str(current.get("number") or "")
-    pir = repo_root() / "reports" / "pir" / f"{number}.md"
-    assert pir.is_file()
+    print_pir(number)
 
 
 def _ensure_trigger(agent: ServiceNowClient) -> None:

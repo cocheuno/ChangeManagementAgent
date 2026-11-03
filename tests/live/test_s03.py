@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import uuid
 
-from cm_agents.servicenow.changes import find_by_correlation, journal, read_change
+from cm_agents.servicenow.changes import (
+    approval_comments,
+    find_by_correlation,
+    journal,
+    read_change,
+)
 from cm_agents.servicenow.client import ServiceNowClient
 from cm_agents.settings import load_settings, repo_root
 from tests.helpers.approve_as_human import approve_pending_once, reject_pending_once
@@ -50,12 +55,16 @@ def test_s03_cab_rejection_is_recorded_without_implementation() -> None:
     ) as admin:
         current = read_change(admin, change_id)
         notes = journal(admin, change_id)
+        comments = approval_comments(admin, change_id)
         print(
             f"s03 number={current.get('number')} state={current.get('state')} "
             f"risk={current.get('risk')} start={current.get('start_date')}"
         )
+        for text in comments:
+            print(f"s03 approval comment {text}")
         for text in notes:
             print(f"s03 note {text}")
+        assert any("SYN reject: backout is not acceptable" in text for text in comments)
         assert str(current.get("risk")) == "2"
         assert str(current.get("start_date")) > "2026-10-30 22:00:00"
         assert any("freeze" in text.lower() for text in notes)

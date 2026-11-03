@@ -259,8 +259,8 @@ These checks were made on 2026-11-03. They do not replace the Phase 0 evidence a
 
 Question: S04 asked for 2026-11-08 03:00:00 to 05:00:00 UTC, which is Saturday 22:00 to Sunday 00:00 Eastern. ServiceNow returned `not_in_maintenance_window`. Which schedule is that, and which check does the Deployment agent follow?
 
-- Check: `syn-shared-sqlclu-prd-01` is a `cmdb_ci_db_instance` with a maintenance schedule. The schedule row is `SYN Tier-1 Maintenance (Sat 22:00-Sun 04:00)`, `time_zone=US/Eastern`, `type=maintenance`. Its one span is `SYN Saturday night`, `start_date_time=20110101T220000`, `end_date_time=20110102T040000`, `repeat_type=weekly`, `days_of_week=6`. Seed inserted that span with the Table API and `display_value=false`. The CI and the span were not modified.
-- Evidence: a conflict probe on that CI, later deleted (`probe_left=0`):
+- Check: `syn-shared-sqlclu-prd-01` is a `cmdb_ci_db_instance` with a maintenance schedule. The schedule row is `SYN Tier-1 Maintenance (Sat 22:00-Sun 04:00)`, `time_zone=US/Eastern`, `type=maintenance`. Its one span is `SYN Saturday night`, `start_date_time=20110101T220000`, `end_date_time=20110102T040000`, `repeat_type=weekly`, `days_of_week=6`. That compact string is an America/New_York wall clock. Seed stores it unchanged. The CI's `maintenance_schedule` pointer was not left pointing at another schedule.
+- First evidence, taken while the checker was not reading that CI schedule (`probe_left=0`):
 
 ```
 window sat_1700_et 2026-11-07 22:00:00 2026-11-07 23:00:00 types=none
@@ -269,15 +269,29 @@ window s04_sat_2200_0000_et 2026-11-08 03:00:00 2026-11-08 05:00:00 types=not_in
 window sun_0000_0100_et 2026-11-08 05:00:00 2026-11-08 06:00:00 types=not_in_maintenance_window
 ```
 
-Saturday 17:00–18:00 Eastern is 22:00–23:00 UTC, and that window raised no maintenance flag. Saturday 22:00 Eastern is 03:00 UTC, and that window did. The span text is 22:00–04:00. ServiceNow is matching that clock as UTC. The schedule's `time_zone` says `US/Eastern` and does not move the stored span onto Saturday night Eastern. The `ci_already_scheduled` rows were leftovers from the Phase 2 changes and were removed with them. Policy code, in `America/New_York`, treats Saturday 22:00–Sunday 04:00 Eastern as inside the tier-1 window.
+Saturday 17:00 Eastern raised no maintenance flag and Saturday 22:00 Eastern did. That looked like ServiceNow matching the span text as UTC. It was not. `change.conflict.ci_maint_sched` defaults to false, so the checker ignores `maintenance_schedule` on the CI. `Global Infrastructure` is demo data: a conditional maintenance schedule with an empty condition, so it applied to every CI, and its span is Saturday 01:00–04:00. That demo window supplied `not_in_maintenance_window`. The `ci_already_scheduled` rows were leftovers from the Phase 2 changes and were removed with them.
 
-- Decision: policy code governs whether a window is a maintenance window. The Deployment agent's precondition follows that. `clock.now()` must fall inside the change's approved planned start and end. A standard change outside the policy span is blocked. A normal or emergency change is not blocked for that reason. `not_in_maintenance_window` is recorded and is not a scheduling block and not a deployment block. Item 7 still stands for CI overlap: `ci_already_scheduled` and `blackout` still come from the OOB conflict API. The maintenance-window half of item 7 does not govern deployment.
+- Cause: the SYN span was already the Eastern wall clock. The conflict checker was not using it.
+- Fix: `_ensure_schedules` updates the existing spans in place. It does not convert the wall clock to UTC. Converting Saturday 22:00 Eastern to a UTC instant puts that hour outside the window in June, when daylight saving is in effect. The same path sets `change.conflict.ci_maint_sched` to true and, when `Global Infrastructure` has an empty condition, sets that condition to `nameNOT LIKEsyn-`. A SYN CI is then excluded from the demo window. `float_day`, `float_week`, and `yearly_type` are cleared so the span matches the out-of-box shape. `is_legacy_schedule` stays true. The tier-2/3 spans stay `20110104T200000`–`20110104T230000` (Tuesday) and `20110106T200000`–`20110106T230000` (Thursday), also `US/Eastern`. This was not a full reseed.
+- Proof, after that seed path, on `syn-shared-sqlclu-prd-01`. Each probe is one hour. November 7 2026 is Eastern Standard Time. June 6 2026 is Eastern Daylight Time. The flagged rows name the SYN tier-1 schedule `a50fc9acc3505750aef2be1d0501318c`. The probes were deleted.
+
+```
+nov_2200 2026-11-08 03:00:00 2026-11-08 04:00:00 clear []
+nov_1700 2026-11-07 22:00:00 2026-11-07 23:00:00 flagged ['a50fc9acc3505750aef2be1d0501318c']
+jun_2200 2026-06-07 02:00:00 2026-06-07 03:00:00 clear []
+jun_1700 2026-06-06 21:00:00 2026-06-06 22:00:00 flagged ['a50fc9acc3505750aef2be1d0501318c']
+probe_left 0
+```
+
+Only the Saturday 22:00 Eastern probes are free of `not_in_maintenance_window`.
+
+- Decision: the ServiceNow record matches policy in Eastern time, including across daylight saving. Policy code still governs whether a deployment window is inside maintenance. The Deployment agent's precondition follows that. `clock.now()` must fall inside the change's approved planned start and end. A standard change outside the policy span is blocked. A normal or emergency change is not blocked for that reason. `not_in_maintenance_window` is recorded and is not a scheduling block and not a deployment block. Item 7 still stands for CI overlap: `ci_already_scheduled` and `blackout` still come from the OOB conflict API. The maintenance-window half of item 7 does not govern deployment.
 
 ### Blackout Wednesdays (GMT)
 
 - Check: `cmn_schedule_blackout` rows on this PDI.
 - Evidence: `Software Blackout` (`806b13e437501000bff8e0f6177334f4`) has `source=cmdb_ci`, `applies_to=cmdb_ci`, and condition `sys_class_name=cmdb_ci_spkg`. `Blackout Wednesdays (GMT)` (`83cd9a930a0a2c3e6d4957fe9651c24d`) has `applies_to=cmdb_ci` and an empty condition, so it applies to every CI. S02 requested 2026-11-11 01:00:00–03:00:00 UTC, which is Tuesday 20:00–22:00 Eastern and Wednesday in GMT. The conflict API returned `blackout`. Scheduling moved the change to 2026-11-06 01:00:00–03:00:00 UTC. That instant is Thursday 20:00 Eastern and is not a Wednesday in GMT, so the window stayed. Policy was not changed to ignore the blackout.
-- Decision: honor the OOB blackout. Do not retune `config/policy.yaml`.
+- Decision: honor the OOB blackout. `Blackout Wednesdays (GMT)` comes from ServiceNow's demo data. Do not edit it. Do not retune `config/policy.yaml`.
 
 ### Standard change plan fields
 

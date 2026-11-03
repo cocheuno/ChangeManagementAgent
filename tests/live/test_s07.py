@@ -9,9 +9,9 @@ import uuid
 from cm_agents.audit import audit_path
 from cm_agents.servicenow.changes import find_by_correlation, find_incident, read_change
 from cm_agents.servicenow.client import ServiceNowClient
-from cm_agents.settings import load_settings, repo_root
+from cm_agents.settings import load_settings
 from tests.helpers.approve_as_human import approve_pending_once
-from tests.live.support import approved_deploy_now, fields, run_cli, start_scenario
+from tests.live.support import approved_deploy_now, fields, print_pir, run_cli, start_scenario
 
 
 def test_s07_failed_canary_rolls_back_without_a_second_prod_deploy() -> None:
@@ -81,12 +81,21 @@ def test_s07_failed_canary_rolls_back_without_a_second_prod_deploy() -> None:
         stored = admin.get_record(
             "incident",
             str(incident["sys_id"]),
-            fields=["priority", "impact", "urgency", "u_caused_by", "correlation_id"],
+            fields=[
+                "number",
+                "priority",
+                "impact",
+                "urgency",
+                "u_caused_by",
+                "correlation_id",
+            ],
         )
         print(
-            f"s07 incident priority={stored.get('priority')} impact={stored.get('impact')} "
-            f"urgency={stored.get('urgency')} caused_by_match="
-            f"{stored.get('u_caused_by') == change_id}"
+            f"s07 incident number={stored.get('number')} "
+            f"sys_id={incident.get('sys_id')} "
+            f"u_caused_by={stored.get('u_caused_by')} change_sys_id={change_id} "
+            f"priority={stored.get('priority')} impact={stored.get('impact')} "
+            f"urgency={stored.get('urgency')}"
         )
         assert str(stored.get("u_caused_by") or "") == change_id
         assert str(stored.get("correlation_id") or "") == thread
@@ -100,9 +109,7 @@ def test_s07_failed_canary_rolls_back_without_a_second_prod_deploy() -> None:
     failed_at = [index for index, text in enumerate(outcomes) if "result=failed" in text]
     assert failed_at
     assert failed_at[-1] == len(outcomes) - 1
-    pir = repo_root() / "reports" / "pir" / f"{number}.md"
-    assert pir.is_file()
-    assert "Hypothesis:" in pir.read_text(encoding="utf-8")
+    print_pir(number)
 
 
 def _prod_steps(thread: str) -> list[str]:

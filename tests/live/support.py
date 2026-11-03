@@ -76,6 +76,25 @@ def start_scenario(filename: str, thread: str) -> subprocess.CompletedProcess[st
     return run_cli("change", "new", "--file", str(path), "--thread", thread)
 
 
+PIR_SECTIONS = (
+    "## Timeline",
+    "## What went well",
+    "## What didn't",
+    "## Root-cause hypothesis",
+    "Hypothesis:",
+    "## Actions",
+)
+
+
+def print_pir(number: str) -> None:
+    path = repo_root() / "reports" / "pir" / f"{number}.md"
+    text = path.read_text(encoding="utf-8")
+    print(f"pir file {path.name}")
+    for heading in PIR_SECTIONS:
+        print(f"pir section {heading!r} present={heading in text}")
+        assert heading in text
+
+
 def fields(stdout: str) -> dict[str, str]:
     found: dict[str, str] = {}
     for line in stdout.splitlines():

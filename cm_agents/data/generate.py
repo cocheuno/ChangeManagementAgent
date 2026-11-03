@@ -485,6 +485,7 @@ def _slug(text: str) -> str:
 
 
 def _schedules() -> list[dict[str, Any]]:
+    """Compact strings are America/New_York wall times. Store them unchanged."""
     return [
         {
             "name": TIER1_SCHEDULE,

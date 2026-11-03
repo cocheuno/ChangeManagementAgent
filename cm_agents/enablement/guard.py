@@ -20,9 +20,10 @@ def injection_markers(*texts: str) -> list[str]:
 def blocks_schedule(conflict_type: str, change_type: str) -> bool:
     """CI overlap and blackout block every type. The OOB maintenance flag does not.
 
-    Policy code decides whether a window is inside maintenance. On this PDI the
-    stored span is a UTC clock time, so ServiceNow flags the policy Saturday
-    window. A normal change may also run outside that window; that adds risk
+    Policy code decides whether a window is inside maintenance. The seeded span
+    is an Eastern wall clock, and ServiceNow applies the schedule time zone.
+    Deployment still follows policy, so not_in_maintenance_window is not a
+    block. A normal change may also run outside that window; that adds risk
     points. docs/DISCOVERY.md Phase 3.
     """
     name = conflict_type.casefold().replace(" ", "_")
