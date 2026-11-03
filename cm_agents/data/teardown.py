@@ -7,6 +7,7 @@ from typing import Any
 
 from cm_agents.data.batch import BatchError, batch_delete
 from cm_agents.data.manifest import drop_records, load_manifest, save_manifest
+from cm_agents.data.oob import OobError, restore_oob_originals
 from cm_agents.data.queries import (
     BLACKOUT,
     CHANGE,
@@ -255,6 +256,12 @@ def teardown(settings: Settings) -> int:
         for _ in range(4):
             if not _sweep(client, "sys_update_xml", UPDATE_XML_QUERY):
                 break
+        # After the data rows, and before the manifest file is removed.
+        # A failed restore leaves the file in place so the originals are kept.
+        try:
+            restore_oob_originals(client, manifest)
+        except OobError as exc:
+            raise TeardownError(str(exc)) from None
         seeded_at = manifest.get("seeded_at")
         _verify(client, baseline, seeded_at if isinstance(seeded_at, str) and seeded_at else None)
         # incident.u_caused_by is a human-made column. Deleting the SYN

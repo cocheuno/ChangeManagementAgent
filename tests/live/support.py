@@ -101,6 +101,6 @@ def fields(stdout: str) -> dict[str, str]:
         if ":" not in line:
             continue
         key, value = line.split(":", 1)
-        if key in {"thread", "interrupt", "step", "change", "state", "error"}:
+        if key in {"thread", "interrupt", "step", "change", "state", "error", "detail"}:
             found[key] = value.strip()
     return found

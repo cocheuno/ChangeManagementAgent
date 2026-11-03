@@ -1,0 +1,29 @@
+# S06. docs/DISCOVERY.md item 10.
+# The readiness gate runs before the release is submitted. It fails while one
+# member is awaiting authorization, and it names that member and that check.
+# After the test helper approves the member, the gate passes. Release risk is
+# the highest member tier, set by code. Authorization is Change Management at
+# Assess, then CAB Approval at Authorize, with an interrupt at each step.
+# Go/no-go comes after authorization. DEV, TEST, STAGE, and PROD each pass
+# on the release's implementation task. The agent creates no member tasks.
+# The normal model inserts Implement and Post implementation testing, and
+# those rows stay Canceled. Members close with the release, and the close
+# notes name the release change.
+service: STORE
+version: 2026.11.0
+window_start: "2026-11-15 03:00:00"
+window_end: "2026-11-15 09:00:00"
+assignment_group: SYN Store DevOps
+members:
+  - ci: syn-store-web
+    summary: SYN publish store web for 2026.11.0
+    await_authorization: false
+  - ci: syn-store-api
+    summary: SYN publish store api for 2026.11.0
+    await_authorization: false
+  - ci: syn-store-catalog
+    summary: SYN publish store catalog for 2026.11.0
+    await_authorization: false
+  - ci: syn-store-cart
+    summary: SYN publish store cart for 2026.11.0
+    await_authorization: true

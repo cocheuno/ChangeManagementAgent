@@ -64,6 +64,19 @@ def main(argv: list[str] | None = None) -> int:
     )
     status_change = sub.add_parser("status", help="Show a thread and re-read its change")
     status_change.add_argument("thread")
+    release = sub.add_parser("release", help="Create or run a release change")
+    release_sub = release.add_subparsers(dest="release_command", required=True)
+    new_release = release_sub.add_parser("new", help="Create a release change and stop")
+    new_release.add_argument("--service", required=True)
+    new_release.add_argument("--version", required=True)
+    new_release.add_argument("--window", nargs=2, required=True, metavar=("START", "END"))
+    new_release.add_argument("--thread", default=None)
+    run_release = release_sub.add_parser(
+        "run",
+        help="Start a release thread. Pass --thread, or SERVICE VERSION such as STORE 2026.11.0",
+    )
+    run_release.add_argument("name", nargs="*")
+    run_release.add_argument("--thread", default=None)
     args = parser.parse_args(argv)
     try:
         settings = load_settings()
@@ -128,7 +141,86 @@ def main(argv: list[str] | None = None) -> int:
         except RunError as exc:
             print(str(exc), file=sys.stderr)
             return 1
+    if args.command == "release":
+        return _release(settings, args)
     return 2
+
+
+def _release(settings: object, args: argparse.Namespace) -> int:
+    from cm_agents.agents.release import resolve_service
+    from cm_agents.graphs.runner import create_release, new_release_thread_id, start_release
+    from cm_agents.settings import Settings
+
+    if not isinstance(settings, Settings):
+        return 2
+    try:
+        if args.release_command == "new":
+            service = resolve_service(args.service)
+            start, end = _window(args.window[0], args.window[1])
+            thread_id = args.thread or new_release_thread_id()
+            return create_release(
+                settings,
+                service=service,
+                version=args.version.strip(),
+                start=start,
+                end=end,
+                thread_id=thread_id,
+            )
+        if args.release_command == "run":
+            thread_id = args.thread or _release_thread(settings, args.name)
+            return start_release(settings, thread_id)
+    except Exception as exc:
+        return _fail(exc, settings)
+    return 2
+
+
+def _window(start: str, end: str) -> tuple[str, str]:
+    from datetime import datetime
+
+    from cm_agents.graphs.runner import RunError
+
+    try:
+        datetime.strptime(start, "%Y-%m-%d %H:%M:%S")
+        datetime.strptime(end, "%Y-%m-%d %H:%M:%S")
+    except ValueError as exc:
+        raise RunError("window must be YYYY-MM-DD HH:MM:SS UTC") from exc
+    if start >= end:
+        raise RunError("window start must be before the end")
+    return start, end
+
+
+def _release_thread(settings: object, name: list[str]) -> str:
+    from cm_agents.agents.release import release_summary, resolve_service
+    from cm_agents.graphs.runner import RunError
+    from cm_agents.servicenow.client import ServiceNowClient
+    from cm_agents.settings import Settings
+
+    if not isinstance(settings, Settings):
+        raise RunError("settings are missing")
+    if len(name) != 2:
+        raise RunError("release run needs --thread or SERVICE VERSION")
+    service = resolve_service(name[0])
+    summary = release_summary(service, name[1].strip())
+    with ServiceNowClient(
+        settings.sn_instance_url,
+        settings.sn_agent_user,
+        settings.sn_agent_password,
+        secrets=settings.secret_values(),
+        timeout=60,
+    ) as client:
+        rows = client.get_table(
+            "change_request",
+            query=f"short_description={summary}",
+            fields=["sys_id", "short_description", "correlation_id"],
+            limit=5,
+        )
+    match = [row for row in rows if row.get("short_description") == summary]
+    if len(match) != 1:
+        raise RunError(f"release {summary} was not found")
+    thread_id = str(match[0].get("correlation_id") or "")
+    if not thread_id.startswith(("SYN-RUN-", "SYN-S06-")):
+        raise RunError("that release is not a runnable scenario thread")
+    return thread_id
 
 
 def _fail(exc: Exception, settings: object) -> int:

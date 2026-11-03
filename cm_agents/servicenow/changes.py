@@ -432,7 +432,15 @@ def change_tasks(client: ServiceNowClient, change_id: str) -> list[dict[str, Any
     return client.get_table(
         "change_task",
         query=f"change_request={change_id}",
-        fields=["sys_id", "number", "short_description", "change_task_type", "state"],
+        fields=[
+            "sys_id",
+            "number",
+            "short_description",
+            "change_task_type",
+            "state",
+            "description",
+            "close_notes",
+        ],
         limit=20,
     )
 

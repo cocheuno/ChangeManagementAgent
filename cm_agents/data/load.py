@@ -23,6 +23,13 @@ from cm_agents.data.manifest import (
     new_manifest,
     save_manifest,
 )
+from cm_agents.data.oob import (
+    GLOBAL_CONDITION_KEY,
+    GLOBAL_CONDITION_TARGET,
+    PROPERTY_KEY,
+    PROPERTY_TARGET,
+    record_oob_original,
+)
 from cm_agents.data.queries import (
     BLACKOUT,
     CHANGE,
@@ -525,7 +532,7 @@ def _ensure_schedules(
         found[name] = sys_id
         for span in schedule["spans"]:
             _ensure_span(client, manifest, path, sys_id, span)
-    _ensure_conflict_uses_ci_schedule(client)
+    _ensure_conflict_uses_ci_schedule(client, manifest, path)
     return found
 
 
@@ -588,7 +595,9 @@ def _ensure_span(
     save_manifest(path, manifest)
 
 
-def _ensure_conflict_uses_ci_schedule(client: ServiceNowClient) -> None:
+def _ensure_conflict_uses_ci_schedule(
+    client: ServiceNowClient, manifest: dict[str, Any], path: Path
+) -> None:
     """Make conflict results use the CI schedule, not the demo window.
 
     change.conflict.ci_maint_sched defaults to false, so the checker ignores
@@ -596,21 +605,34 @@ def _ensure_conflict_uses_ci_schedule(client: ServiceNowClient) -> None:
     schedule with an empty condition, so it applies to every CI and flags
     anything outside Saturday 01:00-04:00. A SYN CI is excluded from that demo
     schedule. The seeded span stays the Eastern wall clock.
+
+    The value stored in the manifest is the value read before the write. A
+    later call does not replace it. These two rows are the approved out-of-box
+    changes. Do not add another property or demo record here.
     """
     rows = client.get_table(
         "sys_properties",
-        query="name=change.conflict.ci_maint_sched",
+        query=f"name={PROPERTY_KEY}",
         fields=["sys_id", "value"],
         limit=1,
     )
     if len(rows) != 1:
         raise SeedError("change.conflict.ci_maint_sched was not found")
-    if str(rows[0].get("value") or "").lower() != "true":
-        client.update_record("sys_properties", str(rows[0]["sys_id"]), {"value": "true"})
-        stored = client.get_record(
-            "sys_properties", str(rows[0]["sys_id"]), fields=["value"]
-        )
-        if str(stored.get("value") or "").lower() != "true":
+    property_id = str(rows[0]["sys_id"])
+    property_value = "" if rows[0].get("value") is None else str(rows[0].get("value"))
+    if record_oob_original(
+        manifest,
+        PROPERTY_KEY,
+        table="sys_properties",
+        sys_id=property_id,
+        field="value",
+        value=property_value,
+    ):
+        save_manifest(path, manifest)
+    if property_value.lower() != PROPERTY_TARGET:
+        client.update_record("sys_properties", property_id, {"value": PROPERTY_TARGET})
+        stored = client.get_record("sys_properties", property_id, fields=["value"])
+        if str(stored.get("value") or "").lower() != PROPERTY_TARGET:
             raise SeedError("change.conflict.ci_maint_sched did not stay true")
     demo = client.get_table(
         "cmn_schedule_maintenance",
@@ -620,18 +642,28 @@ def _ensure_conflict_uses_ci_schedule(client: ServiceNowClient) -> None:
     )
     if len(demo) != 1:
         raise SeedError("Global Infrastructure maintenance schedule was not found")
-    condition = str(demo[0].get("condition") or "")
+    schedule_id = str(demo[0]["sys_id"])
+    condition = "" if demo[0].get("condition") is None else str(demo[0].get("condition"))
+    if record_oob_original(
+        manifest,
+        GLOBAL_CONDITION_KEY,
+        table="cmn_schedule_maintenance",
+        sys_id=schedule_id,
+        field="condition",
+        value=condition,
+    ):
+        save_manifest(path, manifest)
     if "syn-" in condition.casefold():
         return
     if condition.strip():
         raise SeedError("Global Infrastructure already has a condition")
     client.update_record(
         "cmn_schedule_maintenance",
-        str(demo[0]["sys_id"]),
-        {"condition": "nameNOT LIKEsyn-"},
+        schedule_id,
+        {"condition": GLOBAL_CONDITION_TARGET},
     )
     updated = client.get_record(
-        "cmn_schedule_maintenance", str(demo[0]["sys_id"]), fields=["condition"]
+        "cmn_schedule_maintenance", schedule_id, fields=["condition"]
     )
     if "syn-" not in str(updated.get("condition") or "").casefold():
         raise SeedError("Global Infrastructure condition did not exclude SYN CIs")
