@@ -1,7 +1,8 @@
 """Metrics and patterns computed from the fixture document.
 
-This is a separate path from the metrics agent, which reads ServiceNow. Pattern
-rates for P1-P4 ignore release changes. Volume and on-time metrics include them.
+This is a separate path from the metrics agent, which reads ServiceNow. The
+population rules are in docs/ASSUMPTIONS.md. Pattern rates for P1-P4 ignore
+release changes. Rounding uses the shared one-decimal helper.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from cm_agents.data.import_time import EASTERN, UTC
+from cm_agents.rounding import percent, round_1
 
 _FORMAT = "%Y-%m-%d %H:%M:%S"
 
@@ -36,9 +38,21 @@ def build_ground_truth(fixtures: dict[str, Any]) -> dict[str, Any]:
     }
     weeks = (end - start).total_seconds() / (7 * 24 * 3600)
     candidates = _candidates(pattern_rows, caused_changes)
+    ci_environment = {
+        str(row["name"]): str(row.get("environment") or "") for row in fixtures["cis"]
+    }
     return {
         "anchor": fixtures["anchor"],
         "period": {"start": fixtures["history_start"], "end": fixtures["anchor"]},
+        "population": {
+            "seed_only": True,
+            "change_window": "[history_start, anchor)",
+            "releases_in_change_metrics": "opened_at inside the window only",
+            "early_releases_in_on_time": True,
+            "implemented_state": "3",
+            "prod": "fixture environment prod, stored on the instance as Production, or a release",
+            "mttr": "change-caused incidents opened inside the window",
+        },
         "patterns": {
             "p1": _p1(pattern_rows),
             "p2": _p2(pattern_rows),
@@ -62,8 +76,8 @@ def build_ground_truth(fixtures: dict[str, Any]) -> dict[str, Any]:
             "emergency_ratio_pct": _share_pct(period, "emergency"),
             "standard_share_pct": _share_pct(period, "standard"),
             "lead_time_hours": _lead_time(implemented),
-            "deployment_frequency_per_week": _frequency(implemented, weeks),
-            "mttr_hours": _mttr(incidents),
+            "deployment_frequency_per_week": _frequency(implemented, weeks, ci_environment),
+            "mttr_hours": _mttr(incidents, start, end),
             "release_on_time_pct": _release_on_time(changes),
         },
         "standard_change_candidates": [row["signature"] for row in candidates],
@@ -88,12 +102,6 @@ def _parse(text: str) -> datetime:
     return datetime.strptime(text, _FORMAT).replace(tzinfo=UTC)
 
 
-def _pct(part: int, whole: int) -> float:
-    if whole == 0:
-        return 0.0
-    return round(100 * part / whole, 1)
-
-
 def _count(rows: list[dict[str, Any]], field: str) -> dict[str, int]:
     totals: dict[str, int] = {}
     for row in rows:
@@ -116,24 +124,22 @@ def _failed(row: dict[str, Any], caused_changes: set[str]) -> bool:
 
 def _success_pct(rows: list[dict[str, Any]]) -> float:
     ok = sum(1 for row in rows if row["close_code"] in {"successful", "successful_issues"})
-    return _pct(ok, len(rows))
+    return percent(ok, len(rows))
 
 
 def _failure_pct(rows: list[dict[str, Any]], caused_changes: set[str]) -> float:
     failed = sum(1 for row in rows if _failed(row, caused_changes))
-    return _pct(failed, len(rows))
+    return percent(failed, len(rows))
 
 
 def _share_pct(rows: list[dict[str, Any]], change_type: str) -> float:
     matched = sum(1 for row in rows if row["type"] == change_type)
-    return _pct(matched, len(rows))
+    return percent(matched, len(rows))
 
 
 def _failure_rate(rows: list[dict[str, Any]]) -> float:
-    if not rows:
-        return 0.0
     failed = sum(1 for row in rows if row["close_code"] == "unsuccessful")
-    return round(100 * failed / len(rows), 1)
+    return percent(failed, len(rows))
 
 
 def _p1(rows: list[dict[str, Any]]) -> dict[str, float | int]:
@@ -186,7 +192,7 @@ def _p4(rows: list[dict[str, Any]]) -> dict[str, float | int]:
     return {
         "count": len(group),
         "weak_count": len(weak),
-        "weak_share_pct": _pct(len(weak), len(group)),
+        "weak_share_pct": percent(len(weak), len(group)),
         "weak_failure_pct": weak_rate,
         "strong_failure_pct": strong_rate,
         "ratio": ratio,
@@ -204,7 +210,7 @@ def _p5(changes: list[dict[str, Any]], incidents: list[dict[str, Any]]) -> dict[
     return {
         "emergency_count": len(emergencies),
         "linked_count": len(linked),
-        "linked_pct": _pct(len(linked), len(emergencies)),
+        "linked_pct": percent(len(linked), len(emergencies)),
     }
 
 
@@ -247,34 +253,47 @@ def _lead_time(rows: list[dict[str, Any]]) -> float:
             continue
         delta = _parse(row["work_end"]) - _parse(row["opened_at"])
         hours.append(delta.total_seconds() / 3600)
-    return round(_median(hours), 1)
+    return round_1(_median(hours))
 
 
-def _frequency(rows: list[dict[str, Any]], weeks: float) -> dict[str, float]:
+def _counts_as_prod(row: dict[str, Any], ci_environment: dict[str, str]) -> bool:
+    """A release is a production go-live. Any other change follows its CI."""
+    if row["release"]:
+        return True
+    return ci_environment.get(row["cmdb_ci"]) == "prod"
+
+
+def _frequency(
+    rows: list[dict[str, Any]], weeks: float, ci_environment: dict[str, str]
+) -> dict[str, float]:
     totals: dict[str, int] = {}
     for row in rows:
-        if row["environment"] != "prod":
+        if not _counts_as_prod(row, ci_environment):
             continue
         totals[row["service"]] = totals.get(row["service"], 0) + 1
-    return {service: round(count / weeks, 1) for service, count in sorted(totals.items())}
+    return {service: round_1(count / weeks) for service, count in sorted(totals.items())}
 
 
-def _mttr(incidents: list[dict[str, Any]]) -> float:
+def _mttr(incidents: list[dict[str, Any]], start: datetime, end: datetime) -> float:
     hours = []
     for row in incidents:
         caused = str(row.get("caused_by", "")).startswith("SYN-CHG") or str(
             row.get("caused_by", "")
         ).startswith("SYN-REL")
-        if caused and row["opened_at"] and row["resolved_at"]:
-            delta = _parse(row["resolved_at"]) - _parse(row["opened_at"])
-            hours.append(delta.total_seconds() / 3600)
-    return round(_median(hours), 1)
+        if not caused or not row["opened_at"] or not row["resolved_at"]:
+            continue
+        opened = _parse(row["opened_at"])
+        if opened < start or opened >= end:
+            continue
+        delta = _parse(row["resolved_at"]) - opened
+        hours.append(delta.total_seconds() / 3600)
+    return round_1(_median(hours))
 
 
 def _release_on_time(changes: list[dict[str, Any]]) -> float:
     releases = [row for row in changes if row["release"]]
     on_time = sum(1 for row in releases if _parse(row["work_end"]) <= _parse(row["end_date"]))
-    return _pct(on_time, len(releases))
+    return percent(on_time, len(releases))
 
 
 def _median(values: list[float]) -> float:

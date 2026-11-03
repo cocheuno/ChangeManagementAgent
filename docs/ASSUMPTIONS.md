@@ -39,9 +39,32 @@ These are the choices the build proceeds with. Phase 0 left four decisions open.
 - A scenario or agent row has a `correlation_id` that starts with `SYN-` and does not start with `SYN-CHG-`, `SYN-OPEN-`, `SYN-REL-`, or `SYN-INC-`. `remove_scenario_records` deletes those changes and incidents. Deleting the change removes its tasks and affected-CI rows. `counts_in_metrics` is true only for the four seed prefixes. A deployment incident uses the thread id as `correlation_id`, so Phase 5 metrics cannot count it. Change tasks have no separate metric query.
 - Teardown compares each baseline table's rows with `sys_created_on` before the seed time to the stored baseline. Rows created after the seed, including the daily `cert_follow_on_task` job, are printed and do not fail the check. The Phase 1 manifest left on this instance has no `seeded_at`. Teardown of that seed still compares totals and prints that `seeded_at` is missing. The next new seed records `seeded_at`. This seed was not torn down and was not re-seeded.
 
+## Phase 5 metric population
+
+Written before the Phase 5 report is computed. `cm_agents/agents/metrics.py` and `build_ground_truth` both follow this rule. They do not share formula code. `cm_agents/rounding.py` (`round_1`, `percent`) is the only shared helper. Each module has its own median. Percentages and hours round to 1 decimal. Python `round` is bankers rounding.
+
+The population is seed records only. A change counts when `correlation_id` starts with `SYN-CHG-`, `SYN-OPEN-`, or `SYN-REL-`. An incident counts when it starts with `SYN-INC-`. `counts_in_metrics` is that test. Scenario rows and ServiceNow demo records are out. Change tasks are not a metric population, including the Canceled Implement and Post implementation testing tasks the normal model adds.
+
+S09 uses the half-open window on `opened_at` from `2025-10-27 00:00:00` UTC inclusive through `2026-10-27 00:00:00` UTC exclusive. That is the 12 months ending at the fixture anchor, not the date the report runs. `cm-agents report metrics` requires `--from` and `--to`. `--period` is only the file name.
+
+- Volume by type, by service, and by month counts every seed change opened in that window, including open changes, canceled changes, and releases opened in the window. The service is the single service name in the change description. The month is the `opened_at` year and month. The fixture `service` field is that same description name.
+- Implemented means state Closed (`3`). Canceled (`4`) and a rejected change sent back to New (`-5`) are not implemented.
+- The 20 release changes count in volume, success, failure, the emergency ratio, the standard share, lead time, and deployment frequency only when `opened_at` is inside the window. Sixteen are. The four `2025.11.0` releases open at `2025-10-26 02:00:00` UTC and are outside those metrics.
+- Change success rate is (`successful` + `successful_issues`) / implemented changes in the window.
+- Change failure rate is implemented changes in the window whose `close_code` is `unsuccessful`, or whose `sys_id` is `incident.u_caused_by` on any seed incident, divided by the implemented changes in the window. The caused set is not limited to the window. The instance field is `u_caused_by`.
+- Emergency change ratio is emergency changes / every seed change opened in the window.
+- Standard change share is standard changes / every seed change opened in the window.
+- Change lead time is the median hours from `opened_at` to `work_end` for implemented changes in the window that have a `work_end`.
+- Deployment frequency is implemented PROD changes per service per week. Weeks are the window length in seconds divided by 7 days. A release is PROD: its service CI has an empty environment, and a release is a production go-live. A non-release change is PROD only when its CI is in the production class. The fixture word for that class is `prod`. `cmdb_ci.environment` is a choice list of Development, Test, and Production, and it has no stage value. The seed wrote `prod`, `stage`, and `test`. ServiceNow kept `test` as `Test` and stored `prod` and `stage` as empty, so the production class was not readable. The loader writes `Production` and `Test` and leaves stage empty. The current seed's synthetic prod CIs are set to `Production`. `Test` and an empty environment are not PROD. The generator stores `environment` as the constant `prod` on every fixture change, and that value is not on the change record, so it is not the signal. Stage and test CI changes are out.
+- MTTR is the median hours from `opened_at` to `resolved_at` for seed incidents whose `u_caused_by` points at a loaded seed change and whose own `opened_at` is inside the window.
+- Release on-time rate uses every seed release, not the `opened_at` window, including a rolled-back release. On time means `work_end` <= `end_date`. The four `2025.11.0` releases are in this metric and not in the other change metrics.
+- Standard change candidates are normal, not a release, implemented, and opened in the window. The signature is the short description with the case folded and the whitespace collapsed. The group is that signature, the CI `sys_class_name`, and the assignment group name. A group stays when it has at least 10 executions, zero `unsuccessful` closes, and zero caused incidents. Caused uses every seed incident's `u_caused_by`. The proposed template name is `SYN Standard ` plus the signature with a leading `syn ` removed. The report proposes that name. It does not create a template or a proposal.
+
+If `ground_truth.json` and ServiceNow disagree, neither file nor the instance is changed until the side that breaks this rule is identified.
+
 ## Open
 
-Phase 5 metrics are not built. A metrics query has to use the seed prefixes, or call `counts_in_metrics`, so the scenario rows cannot enter a count.
+Phase 5 metrics are built. Phase 6 has not started. A metrics query uses the seed prefixes, and `counts_in_metrics` is the same test, so the scenario rows cannot enter a count.
 
 Phase 4 removed the Phase 3 review rows (`CHG0039417` through `CHG0039421`, `INC0011000`, and `INC0011001`) before S06. The first S06 attempt (`CHG0039422` through `CHG0039426`, thread `SYN-S06-816e63ec`) was removed the same way before the accepted gate. The accepted gate left `CHG0039427` through `CHG0039431` (thread `SYN-S06-cdb4dbcf`). `remove_scenario_records` deletes them. The Phase 1 seed was not torn down.
 

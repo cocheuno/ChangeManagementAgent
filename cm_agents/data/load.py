@@ -726,8 +726,11 @@ def _ci_body(ci: dict[str, Any], schedules: dict[str, str]) -> dict[str, Any]:
         "short_description": ci["name"] if ci["name"].startswith("SYN") else f"SYN {ci['name']}",
         "maintenance_schedule": schedules[ci["schedule"]],
     }
-    if ci["environment"]:
-        body["environment"] = ci["environment"]
+    # cmdb_ci.environment choices are Development, Test, and Production.
+    # stage is not a choice, so those CIs stay empty and are not PROD.
+    choice = {"prod": "Production", "test": "Test"}.get(str(ci.get("environment") or ""))
+    if choice:
+        body["environment"] = choice
     return body
 
 

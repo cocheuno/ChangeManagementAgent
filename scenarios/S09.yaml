@@ -1,0 +1,6 @@
+# S09. Metrics for the 12 months ending at the fixture anchor.
+# The window is history_start through anchor, not the day this report runs.
+# docs/ASSUMPTIONS.md records which records each metric counts.
+period: 2025-10-27_2026-10-27
+from: "2025-10-27 00:00:00"
+to: "2026-10-27 00:00:00"

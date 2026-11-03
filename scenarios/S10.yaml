@@ -1,0 +1,6 @@
+# S10. Standard change candidates for the same window as S09.
+# Propose a template name. Do not create a template or a proposal.
+# The signatures equal patterns.p6 in ground_truth.json.
+period: 2025-10-27_2026-10-27
+from: "2025-10-27 00:00:00"
+to: "2026-10-27 00:00:00"

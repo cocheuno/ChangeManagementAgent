@@ -77,6 +77,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     run_release.add_argument("name", nargs="*")
     run_release.add_argument("--thread", default=None)
+    report = sub.add_parser("report", help="Write a report from ServiceNow")
+    report_sub = report.add_subparsers(dest="report_command", required=True)
+    metrics_report = report_sub.add_parser("metrics", help="§8.4 metrics for an explicit period")
+    metrics_report.add_argument("--period", required=True, help="File name under reports/metrics")
+    metrics_report.add_argument("--from", dest="start", required=True, help="UTC inclusive")
+    metrics_report.add_argument("--to", dest="end", required=True, help="UTC exclusive")
     args = parser.parse_args(argv)
     try:
         settings = load_settings()
@@ -143,6 +149,8 @@ def main(argv: list[str] | None = None) -> int:
             return 1
     if args.command == "release":
         return _release(settings, args)
+    if args.command == "report":
+        return _report(settings, args)
     return 2
 
 
@@ -172,6 +180,27 @@ def _release(settings: object, args: argparse.Namespace) -> int:
     except Exception as exc:
         return _fail(exc, settings)
     return 2
+
+
+def _report(settings: object, args: argparse.Namespace) -> int:
+    import json
+
+    from cm_agents.agents.metrics import run_metrics_report
+    from cm_agents.settings import Settings
+
+    if not isinstance(settings, Settings) or args.report_command != "metrics":
+        return 2
+    try:
+        payload = run_metrics_report(
+            settings,
+            period=args.period,
+            start_text=args.start,
+            end_text=args.end,
+        )
+    except Exception as exc:
+        return _fail(exc, settings)
+    print(json.dumps(payload, sort_keys=True))
+    return 0
 
 
 def _window(start: str, end: str) -> tuple[str, str]:
