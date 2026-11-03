@@ -33,11 +33,14 @@ def run_scheduling(state: dict[str, Any]) -> dict[str, Any]:
     source = "ok"
     seen: list[dict[str, Any]] = []
     reasons: list[str] = []
+    prior_blocks: list[str] = []
     blocked_types: list[str] = []
     blocked_source = ""
     for _pass in range(3):
         seen, source = conflicts_for(ctx.client, state["change_sys_id"])
         reasons = _reasons(state, start, end, lead, seen, source, occupied)
+        if reasons and not prior_blocks:
+            prior_blocks = list(reasons)
         if "conflict" in reasons and not blocked_types:
             blocked_types = _conflict_names(seen, source, state["change_type"])
             blocked_source = source
@@ -68,6 +71,8 @@ def run_scheduling(state: dict[str, Any]) -> dict[str, Any]:
         requested_start, requested_end, start, end, moved, kept_reasons, seen, source
     )
     _remember_block(payload, blocked_types, blocked_source)
+    if payload["moved"] and prior_blocks:
+        payload["prior_blocks"] = prior_blocks
     payload["maintenance"] = "inside" if inside else "outside"
     payload["compliant"] = state["change_type"] == "emergency" or not kept_reasons
     _note(state, payload)
@@ -226,6 +231,8 @@ def _note(state: dict[str, Any], schedule: dict[str, Any]) -> None:
             f"{reason}; moved because {', '.join(schedule['moved_because'])} "
             f"({schedule.get('blocked_source') or schedule['conflict_source']})"
         )
+    if schedule.get("prior_blocks"):
+        reason = f"{reason}; prior {', '.join(schedule['prior_blocks'])}"
     if schedule["blocks"]:
         reason = f"{reason}; flags {', '.join(schedule['blocks'])}"
     write_note(

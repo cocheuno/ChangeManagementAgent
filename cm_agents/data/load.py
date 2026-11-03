@@ -46,6 +46,10 @@ from cm_agents.settings import Settings, repo_root
 IMPORT_ROW = "06803e7b8c1103100a22deb6dd2b4e9c"
 CHUNK = 40
 ROLE_WRITE = "sn_change_write"
+ROLE_JOURNAL = "audit_viewer"
+# incident.urgency write ACL names only this role. Impact is writable without it.
+ROLE_INCIDENT = "sn_incident_write"
+DIRECT_ROLES = (ROLE_WRITE, ROLE_JOURNAL, ROLE_INCIDENT)
 CHG_STAGE = "u_syn_chg_import"
 INC_STAGE = "u_syn_inc_import"
 DATE_FIELDS = frozenset(
@@ -369,18 +373,47 @@ def _ensure_integration_user(
     return created_user
 
 
+def ensure_agent_roles(settings: Settings) -> list[str]:
+    """Grant the direct roles the integration user needs. Does not re-seed."""
+    path = repo_root() / "data" / "synthetic" / "manifest.json"
+    manifest = load_manifest(path)
+    if manifest is None:
+        raise SeedError("manifest missing")
+    with ServiceNowClient(
+        settings.sn_instance_url,
+        settings.sn_admin_user,
+        settings.sn_admin_password,
+        secrets=settings.secret_values(),
+        timeout=120,
+    ) as client:
+        rows = client.get_table(
+            "sys_user",
+            query=f"user_name={settings.sn_agent_user}",
+            fields=["sys_id"],
+            limit=2,
+        )
+        if len(rows) != 1:
+            raise SeedError("integration user was not found")
+        names = _ensure_role(client, manifest, path, str(rows[0]["sys_id"]))
+    print("direct roles: " + ", ".join(names), flush=True)
+    return names
+
+
 def _ensure_role(
     client: ServiceNowClient, manifest: dict[str, Any], path: Path, user_id: str
-) -> None:
-    roles = client.get_table(
-        "sys_user_role",
-        query=f"name={ROLE_WRITE}",
-        fields=["sys_id", "name"],
-        limit=1,
-    )
-    if not roles:
-        raise SeedError("role sn_change_write was not found")
-    role_id = str(roles[0]["sys_id"])
+) -> list[str]:
+    role_ids: dict[str, str] = {}
+    for name in DIRECT_ROLES:
+        roles = client.get_table(
+            "sys_user_role",
+            query=f"name={name}",
+            fields=["sys_id", "name"],
+            limit=2,
+        )
+        match = [row for row in roles if row.get("name") == name]
+        if len(match) != 1:
+            raise SeedError(f"role {name} was not found")
+        role_ids[name] = str(match[0]["sys_id"])
     grants = client.get_table(
         "sys_user_has_role",
         query=f"user={user_id}^inherited=false",
@@ -388,16 +421,23 @@ def _ensure_role(
         limit=20,
     )
     direct = {str(row.get("role")) for row in grants}
-    if role_id not in direct:
+    for name, role_id in role_ids.items():
+        if role_id in direct:
+            continue
         created = client.create_record(
             "sys_user_has_role",
             {"user": user_id, "role": role_id, "inherited": "false"},
         )
-        add_record(manifest, "sys_user_has_role", str(created["sys_id"]), ROLE_WRITE)
+        add_record(manifest, "sys_user_has_role", str(created["sys_id"]), name)
         save_manifest(path, manifest)
         direct.add(role_id)
-    if direct != {role_id}:
-        raise SeedError("integration user direct roles are not exactly sn_change_write")
+        print(f"granted {name}", flush=True)
+    expected = set(role_ids.values())
+    if direct != expected:
+        raise SeedError(
+            "integration user direct roles do not match " + ", ".join(DIRECT_ROLES)
+        )
+    return list(DIRECT_ROLES)
 
 
 def _login_ok(settings: Settings) -> bool:

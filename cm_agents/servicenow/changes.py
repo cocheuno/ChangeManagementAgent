@@ -19,6 +19,9 @@ STATE_NEW = "-5"
 STATE_ASSESS = "-4"
 STATE_AUTHORIZE = "-3"
 STATE_SCHEDULED = "-2"
+STATE_IMPLEMENT = "-1"
+STATE_REVIEW = "0"
+STATE_CLOSED = "3"
 
 _SYS_ID = re.compile(r"^[0-9a-f]{32}$")
 _READ_FIELDS = [
@@ -37,6 +40,10 @@ _READ_FIELDS = [
     "short_description",
     "parent",
     "active",
+    "work_start",
+    "work_end",
+    "close_code",
+    "close_notes",
 ]
 
 
@@ -45,11 +52,15 @@ class ChangeError(RuntimeError):
 
 
 def remember_change(sys_id: str, key: str) -> None:
+    remember_row("change_request", sys_id, key)
+
+
+def remember_row(table: str, sys_id: str, key: str) -> None:
     path = repo_root() / "data" / "synthetic" / "manifest.json"
     manifest = load_manifest(path)
     if manifest is None:
         return
-    add_record(manifest, "change_request", sys_id, key)
+    add_record(manifest, table, sys_id, key)
     save_manifest(path, manifest)
 
 
@@ -389,6 +400,69 @@ def same_window(client: ServiceNowClient, change_id: str, start: str, end: str) 
         for row in rows
         if row.get("number")
     ]
+
+
+def approval_comments(client: ServiceNowClient, change_id: str) -> list[str]:
+    """Approval comments are journal rows. The comments column stays empty."""
+    approvers = client.get_table(
+        "sysapproval_approver",
+        query=f"sysapproval={change_id}",
+        fields=["sys_id"],
+        limit=40,
+    )
+    texts: list[str] = []
+    for row in approvers:
+        notes = client.get_table(
+            "sys_journal_field",
+            query=(
+                "name=sysapproval_approver^element=comments"
+                f"^element_id={row['sys_id']}"
+            ),
+            fields=["value"],
+            limit=5,
+        )
+        for note in notes:
+            value = str(note.get("value") or "").strip()
+            if value:
+                texts.append(value)
+    return texts
+
+
+def change_tasks(client: ServiceNowClient, change_id: str) -> list[dict[str, Any]]:
+    return client.get_table(
+        "change_task",
+        query=f"change_request={change_id}",
+        fields=["sys_id", "number", "short_description", "change_task_type", "state"],
+        limit=20,
+    )
+
+
+def ensure_change_task(
+    client: ServiceNowClient,
+    change_id: str,
+    *,
+    short_description: str,
+    task_type: str,
+) -> dict[str, Any]:
+    for row in change_tasks(client, change_id):
+        if (
+            str(row.get("short_description") or "") == short_description
+            and str(row.get("change_task_type") or "") == task_type
+        ):
+            return row
+    created = client.create_record(
+        "change_task",
+        {
+            "change_request": change_id,
+            "short_description": short_description,
+            "change_task_type": task_type,
+        },
+    )
+    return created
+
+
+def close_change_task(client: ServiceNowClient, task_id: str) -> dict[str, Any]:
+    return client.update_record("change_task", task_id, {"state": "3"})
 
 
 def journal(client: ServiceNowClient, change_id: str) -> list[str]:

@@ -75,6 +75,21 @@ def earliest_window(
     return None
 
 
+def deployment_blocked_by_policy(
+    change_type: str, start: datetime, end: datetime, tier: int
+) -> bool:
+    """True only when policy refuses this approved window.
+
+    A standard change must sit inside a maintenance span. A normal or emergency
+    change may deploy an approved window that ServiceNow marks
+    not_in_maintenance_window. The caller still requires the clock to fall
+    inside the approved planned start and end.
+    """
+    if change_type != "standard":
+        return False
+    return not inside_maintenance(start, end, tier)
+
+
 def blocks(
     *,
     now: datetime,

@@ -250,3 +250,37 @@ The four questions above are closed:
 4. The agent's score is written to `change_request.risk` and `impact` with a plain field update. The Risk Calculator is not called. See item 6.
 
 `cm-agents discover` stays the repeatable Phase 0 probe. It is a utility command, listed in the master prompt §7.3, not an agent command.
+
+## Phase 3
+
+These checks were made on 2026-11-03. They do not replace the Phase 0 evidence above.
+
+### Which check governs a deployment window
+
+Question: S04 asked for 2026-11-08 03:00:00 to 05:00:00 UTC, which is Saturday 22:00 to Sunday 00:00 Eastern. ServiceNow returned `not_in_maintenance_window`. Which schedule is that, and which check does the Deployment agent follow?
+
+- Check: `syn-shared-sqlclu-prd-01` is a `cmdb_ci_db_instance` with a maintenance schedule. The schedule row is `SYN Tier-1 Maintenance (Sat 22:00-Sun 04:00)`, `time_zone=US/Eastern`, `type=maintenance`. Its one span is `SYN Saturday night`, `start_date_time=20110101T220000`, `end_date_time=20110102T040000`, `repeat_type=weekly`, `days_of_week=6`. Seed inserted that span with the Table API and `display_value=false`. The CI and the span were not modified.
+- Evidence: a conflict probe on that CI, later deleted (`probe_left=0`):
+
+```
+window sat_1700_et 2026-11-07 22:00:00 2026-11-07 23:00:00 types=none
+window sat_2200_2300_et 2026-11-08 03:00:00 2026-11-08 04:00:00 types=not_in_maintenance_window,ci_already_scheduled
+window s04_sat_2200_0000_et 2026-11-08 03:00:00 2026-11-08 05:00:00 types=not_in_maintenance_window,ci_already_scheduled
+window sun_0000_0100_et 2026-11-08 05:00:00 2026-11-08 06:00:00 types=not_in_maintenance_window
+```
+
+Saturday 17:00–18:00 Eastern is 22:00–23:00 UTC, and that window raised no maintenance flag. Saturday 22:00 Eastern is 03:00 UTC, and that window did. The span text is 22:00–04:00. ServiceNow is matching that clock as UTC. The schedule's `time_zone` says `US/Eastern` and does not move the stored span onto Saturday night Eastern. The `ci_already_scheduled` rows were leftovers from the Phase 2 changes and were removed with them. Policy code, in `America/New_York`, treats Saturday 22:00–Sunday 04:00 Eastern as inside the tier-1 window.
+
+- Decision: policy code governs whether a window is a maintenance window. The Deployment agent's precondition follows that. `clock.now()` must fall inside the change's approved planned start and end. A standard change outside the policy span is blocked. A normal or emergency change is not blocked for that reason. `not_in_maintenance_window` is recorded and is not a scheduling block and not a deployment block. Item 7 still stands for CI overlap: `ci_already_scheduled` and `blackout` still come from the OOB conflict API. The maintenance-window half of item 7 does not govern deployment.
+
+### Blackout Wednesdays (GMT)
+
+- Check: `cmn_schedule_blackout` rows on this PDI.
+- Evidence: `Software Blackout` (`806b13e437501000bff8e0f6177334f4`) has `source=cmdb_ci`, `applies_to=cmdb_ci`, and condition `sys_class_name=cmdb_ci_spkg`. `Blackout Wednesdays (GMT)` (`83cd9a930a0a2c3e6d4957fe9651c24d`) has `applies_to=cmdb_ci` and an empty condition, so it applies to every CI. S02 requested 2026-11-11 01:00:00–03:00:00 UTC, which is Tuesday 20:00–22:00 Eastern and Wednesday in GMT. The conflict API returned `blackout`. Scheduling moved the change to 2026-11-06 01:00:00–03:00:00 UTC. That instant is Thursday 20:00 Eastern and is not a Wednesday in GMT, so the window stayed. Policy was not changed to ignore the blackout.
+- Decision: honor the OOB blackout. Do not retune `config/policy.yaml`.
+
+### Standard change plan fields
+
+- Check: `std_change_properties` row `internal_name=main_config` (`527b5dafff700200b18affffffffff89`).
+- Evidence: `readonly_fields` is `description,backout_plan,test_plan,implementation_plan`. Business rule `Restrict fields from Standard Change` aborts the whole Table API update if any of those four change. A Phase 3 create of `SYN Standard rotate TLS certificate` returned HTTP 403 on that rule until intake stopped sending them.
+- Decision: on a standard change, intake writes `short_description`, `justification`, `assignment_group`, and `cmdb_ci`, and leaves the four plan fields at the template values. A work note records the deployment method and that the template plan fields are read-only. The plan judge still reads the request text. The template was not edited.

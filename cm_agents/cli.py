@@ -59,6 +59,9 @@ def main(argv: list[str] | None = None) -> int:
     resume_change.add_argument("--decision", choices=["go", "no-go"], default=None)
     resume_change.add_argument("--by", default=None)
     resume_change.add_argument("--reason", default=None)
+    resume_change.add_argument(
+        "--now", default=None, help="UTC simulated clock, YYYY-MM-DD HH:MM:SS"
+    )
     status_change = sub.add_parser("status", help="Show a thread and re-read its change")
     status_change.add_argument("thread")
     args = parser.parse_args(argv)
@@ -154,12 +157,16 @@ def _resume_value(args: argparse.Namespace) -> dict[str, object]:
         loaded = yaml.safe_load(Path(args.info).read_text(encoding="utf-8"))
         if not isinstance(loaded, dict):
             raise RunError("info file must be a mapping")
-        return loaded
-    if args.decision:
+        payload: dict[str, object] = dict(loaded)
+    elif args.decision:
         if not args.by or not args.reason:
             raise RunError("--decision requires --by and --reason")
-        return {"decision": args.decision, "by": args.by, "reason": args.reason}
-    return {"continue": "true"}
+        payload = {"decision": args.decision, "by": args.by, "reason": args.reason}
+    else:
+        payload = {"continue": "true"}
+    if args.now:
+        payload["simulated_now"] = args.now
+    return payload
 
 
 if __name__ == "__main__":

@@ -25,3 +25,5 @@ class ChangeState(TypedDict, total=False):
     risk: dict[str, Any]
     authorization: dict[str, Any]
     service_link: str
+    deployment: dict[str, Any]
+    review: dict[str, Any]

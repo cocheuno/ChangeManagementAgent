@@ -46,6 +46,41 @@ SPAN = _or_equals("name", SPAN_NAMES)
 CHANGE = "correlation_idSTARTSWITHSYN-"
 INCIDENT = "correlation_idSTARTSWITHSYN-"
 TASK_CI = "task.correlation_idSTARTSWITHSYN-"
+# Seed keys. Phase 5 metrics may count only these prefixes.
+SEED_CHANGE_PREFIXES = ("SYN-CHG-", "SYN-OPEN-", "SYN-REL-")
+SEED_INCIDENT_PREFIX = "SYN-INC-"
+SEED_PREFIXES = (*SEED_CHANGE_PREFIXES, SEED_INCIDENT_PREFIX)
+# Agent and scenario rows use any other SYN- correlation id, including SYN-S02-...
+# and the default SYN- plus hex thread id. Metrics must not query CHANGE for them.
+SCENARIO_CORRELATION = (
+    "correlation_idSTARTSWITHSYN-"
+    "^correlation_idNOT LIKESYN-CHG-"
+    "^correlation_idNOT LIKESYN-OPEN-"
+    "^correlation_idNOT LIKESYN-REL-"
+    "^correlation_idNOT LIKESYN-INC-"
+)
+
+
+def counts_in_metrics(correlation_id: str) -> bool:
+    """True only for a seeded change or incident.
+
+    Scenario and probe rows start with SYN- and use a different prefix.
+    Phase 5 metrics have to call this, or query the seed prefixes, so those
+    rows cannot enter a metric.
+    """
+    return str(correlation_id).startswith(SEED_PREFIXES)
+
+
+def metric_change_query() -> str:
+    """Changes Phase 5 may count. Scenario correlation ids do not match."""
+    return "^OR".join(f"correlation_idSTARTSWITH{prefix}" for prefix in SEED_CHANGE_PREFIXES)
+
+
+def metric_incident_query() -> str:
+    """Incidents Phase 5 may count. A deployment incident uses the thread id."""
+    return f"correlation_idSTARTSWITH{SEED_INCIDENT_PREFIX}"
+
+
 USER = "user_nameSTARTSWITHsyn."
 MEMBERSHIP = "user.user_nameSTARTSWITHsyn."
 ROLE = "user.user_nameSTARTSWITHsyn."

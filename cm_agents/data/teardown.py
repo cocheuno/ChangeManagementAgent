@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Any
+
 from cm_agents.data.batch import BatchError, batch_delete
-from cm_agents.data.manifest import load_manifest
+from cm_agents.data.manifest import drop_records, load_manifest, save_manifest
 from cm_agents.data.queries import (
     BLACKOUT,
     CHANGE,
@@ -17,6 +20,7 @@ from cm_agents.data.queries import (
     PROPOSAL,
     RELATIONSHIP,
     ROLE,
+    SCENARIO_CORRELATION,
     SCHEDULE,
     SPAN,
     STAGING_TABLE,
@@ -29,6 +33,7 @@ from cm_agents.data.queries import (
     TRANSFORM_ENTRY,
     TRANSFORM_MAP,
     USER,
+    counts_in_metrics,
 )
 from cm_agents.servicenow.client import ServiceNowClient, ServiceNowError
 from cm_agents.settings import Settings, repo_root
@@ -130,6 +135,93 @@ class TeardownError(Exception):
     """Synthetic rows are still present, or a baseline count moved."""
 
 
+def remove_scenario_records(settings: Settings) -> int:
+    """Delete agent and scenario rows. Seed prefixes stay on the instance."""
+    path = repo_root() / "data" / "synthetic" / "manifest.json"
+    manifest = load_manifest(path)
+    with ServiceNowClient(
+        settings.sn_instance_url,
+        settings.sn_admin_user,
+        settings.sn_admin_password,
+        secrets=settings.secret_values(),
+        timeout=180,
+    ) as client:
+        _remove_scenario_records(client, manifest, path)
+    return 0
+
+
+def _remove_scenario_records(
+    client: ServiceNowClient, manifest: dict[str, Any] | None, path: Path | None
+) -> None:
+    changes = _scenario_rows(client, "change_request")
+    incidents = _scenario_rows(client, "incident")
+    print(f"scenario changes={len(changes)} scenario incidents={len(incidents)}", flush=True)
+    for row in changes + incidents:
+        correlation = str(row.get("correlation_id") or "")
+        print(
+            f"scenario {row.get('number')} correlation_id={correlation}",
+            flush=True,
+        )
+        if counts_in_metrics(correlation):
+            raise TeardownError(f"refusing to delete a metrics row {correlation}")
+    for row in changes:
+        _delete_change_children(client, str(row["sys_id"]))
+    for row in incidents:
+        _delete_one(client, "incident", str(row["sys_id"]))
+    for row in changes:
+        _delete_one(client, "change_request", str(row["sys_id"]))
+    if manifest is not None and path is not None:
+        drop_records(manifest, "change_request", {str(row["sys_id"]) for row in changes})
+        drop_records(manifest, "incident", {str(row["sys_id"]) for row in incidents})
+        save_manifest(path, manifest)
+    left_changes = client.count("change_request", SCENARIO_CORRELATION)
+    left_incidents = client.count("incident", SCENARIO_CORRELATION)
+    print(
+        f"scenario changes remaining={left_changes} scenario incidents remaining={left_incidents}",
+        flush=True,
+    )
+    if left_changes or left_incidents:
+        raise TeardownError("scenario rows are still present")
+
+
+def _scenario_rows(client: ServiceNowClient, table: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    offset = 0
+    while offset < 500:
+        page = client.get_table(
+            table,
+            query=SCENARIO_CORRELATION,
+            fields=["sys_id", "number", "correlation_id"],
+            limit=100,
+            offset=offset,
+        )
+        if not page:
+            return rows
+        rows.extend(page)
+        if len(page) < 100:
+            return rows
+        offset += 100
+    raise TeardownError(f"too many scenario rows in {table}")
+
+
+def _delete_change_children(client: ServiceNowClient, change_id: str) -> None:
+    # task_ci delete is aborted by Change Model: Read only CI (Delete).
+    # Deleting the change removes those rows.
+    for table, query in (
+        ("sysapproval_approver", f"sysapproval={change_id}"),
+        ("sysapproval_group", f"parent={change_id}"),
+        ("change_task", f"change_request={change_id}^ORparent={change_id}"),
+        ("task_cmdb_ci_service", f"task={change_id}"),
+        ("conflict", f"change={change_id}^ORconflicting_change={change_id}"),
+    ):
+        try:
+            children = client.get_table(table, query=query, fields=["sys_id"], limit=50)
+        except ServiceNowError:
+            continue
+        for child in children:
+            _delete_one(client, table, str(child["sys_id"]))
+
+
 def teardown(settings: Settings) -> int:
     path = repo_root() / "data" / "synthetic" / "manifest.json"
     manifest = load_manifest(path)
@@ -146,6 +238,7 @@ def teardown(settings: Settings) -> int:
         secrets=settings.secret_values(),
         timeout=180,
     ) as client:
+        _remove_scenario_records(client, manifest, path)
         for table, query in SWEEPS_BEFORE_USERS:
             print(f"sweep {table}", flush=True)
             _sweep(client, table, query)

@@ -1,0 +1,23 @@
+requester: SYN Service Desk
+summary: SYN rotate TLS certificate on the stage load balancer
+description: Rotate the TLS certificate on the Online Store stage load balancer.
+cis:
+  - syn-store-lb-05
+template: SYN Standard rotate TLS certificate
+justification: The stage certificate expires inside the maintenance window.
+deployment_method: automated
+deployment_strategy: big bang
+implementation_plan: |
+  Deployment method: AUTOMATED
+  1. Owner: SYN Store DevOps. Install the new certificate on the stage load balancer.
+  2. Reload the listener.
+backout_plan: |
+  1. Stop the listener.
+  2. Restore the previous certificate.
+  Trigger: the health check fails. Backout duration: 15 minutes.
+test_plan: |
+  1. Call the stage health endpoint.
+  Success criteria: HTTP 200 and the new certificate is presented.
+proposed_start: "2026-11-08 03:00:00"
+proposed_end: "2026-11-08 05:00:00"
+simulated_now: "2026-11-08 03:00:00"

@@ -1,14 +1,16 @@
-"""Subprocess helpers for the Phase 2 gate. Not part of the unit suite."""
+"""Subprocess helpers for the live gate. Not part of the unit suite."""
 
 from __future__ import annotations
 
 import os
 import subprocess
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
 
+from cm_agents.servicenow.changes import read_change
 from cm_agents.servicenow.client import ServiceNowClient, ServiceNowError
-from cm_agents.settings import repo_root
+from cm_agents.settings import load_settings, repo_root
 
 
 def run_cli(*args: str) -> subprocess.CompletedProcess[str]:
@@ -52,6 +54,21 @@ def delete_change(admin: ServiceNowClient, change_id: str) -> None:
     except ServiceNowError as exc:
         if exc.status_code != 404:
             raise
+
+
+def approved_deploy_now(change_id: str) -> str:
+    """Thirty minutes after the approved planned start, in UTC."""
+    settings = load_settings()
+    with ServiceNowClient(
+        settings.sn_instance_url,
+        settings.sn_admin_user,
+        settings.sn_admin_password,
+        secrets=settings.secret_values(),
+        timeout=60,
+    ) as admin:
+        record = read_change(admin, change_id)
+    start = datetime.strptime(str(record["start_date"]), "%Y-%m-%d %H:%M:%S")
+    return (start + timedelta(minutes=30)).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def start_scenario(filename: str, thread: str) -> subprocess.CompletedProcess[str]:

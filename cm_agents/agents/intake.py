@@ -59,6 +59,23 @@ def run_intake(state: dict[str, Any]) -> dict[str, Any]:
         return {"gaps": gaps, "error": "change was not created"}
     if not gaps:
         _fill(ctx, record, request, change_type, group_name, names, incident, services)
+    if (
+        change_type == "standard"
+        and not gaps
+        and not _already_noted(ctx.client, str(record["sys_id"]), "method")
+    ):
+        write_note(
+            ctx.client,
+            str(record["sys_id"]),
+            thread_id=thread_id,
+            agent="intake",
+            decision="method",
+            reason=(
+                f"Deployment method: {_method(request).upper()}. "
+                "The standard template plan fields are read-only."
+            ),
+            record=str(record.get("number") or record["sys_id"]),
+        )
     flagged = injection_markers(
         str(request.get("description") or ""),
         str(request.get("summary") or ""),
@@ -293,6 +310,11 @@ def _fill(
         fields["assignment_group"] = group_id(ctx.client, group_name)
     if cis:
         fields["cmdb_ci"] = cis[0]["sys_id"]
+    if change_type == "standard":
+        # These four fields are std_change_properties readonly_fields. A change
+        # aborts the whole update. The template values stay.
+        for key in ("description", "implementation_plan", "backout_plan", "test_plan"):
+            fields.pop(key, None)
     update_fields(ctx.client, str(record["sys_id"]), fields)
     if cis and str(record.get("state") or "") == "-5":
         attach_affected(ctx.client, str(record["sys_id"]), [row["sys_id"] for row in cis])

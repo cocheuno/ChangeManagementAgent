@@ -85,9 +85,11 @@ def _invoke(
     request: dict[str, Any] | None,
     resume: dict[str, Any] | None,
 ) -> int:
-    if request and request.get("simulated_now"):
-        pin(parse_utc(str(request["simulated_now"])))
     try:
+        if request and request.get("simulated_now"):
+            pin(parse_utc(str(request["simulated_now"])))
+        if resume and resume.get("simulated_now"):
+            pin(parse_utc(str(resume["simulated_now"])))
         with _graph(settings) as (graph, _client):
             config = {"configurable": {"thread_id": thread_id}}
             if resume is None:
@@ -154,6 +156,12 @@ def _print_result(thread_id: str, snap: Any) -> int:
         if isinstance(payload, dict):
             number = str(payload.get("change_number") or number)
             state_value = str(payload.get("state") or "")
+    elif (values.get("review") or {}).get("change_state"):
+        state_value = str(values["review"].get("change_state") or "")
+        step = str(values["review"].get("route") or step)
+    elif (values.get("deployment") or {}).get("change_state"):
+        state_value = str(values["deployment"].get("change_state") or "")
+        step = str(values["deployment"].get("outcome") or step)
     elif values.get("authorization"):
         state_value = str(values["authorization"].get("change_state") or "")
         step = str(values["authorization"].get("route") or step)

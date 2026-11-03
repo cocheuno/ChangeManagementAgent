@@ -1,0 +1,25 @@
+requester: SYN Fulfillment DevOps
+summary: SYN Fulfillment API canary
+description: Deploy the fulfillment API through a canary.
+cis:
+  - syn-ful-api
+justification: The API needs the new inventory timeout.
+deployment_method: automated
+deployment_strategy: canary
+fail_at:
+  env: PROD
+  step: canary_100
+implementation_plan: |
+  Deployment method: AUTOMATED
+  1. Owner: SYN Fulfillment DevOps. Deploy the canary.
+  2. Promote the build.
+backout_plan: |
+  1. Stop the new tasks.
+  2. Restore the previous build.
+  Trigger: the error rate rises. Backout duration: 15 minutes.
+test_plan: |
+  1. Call the health endpoint.
+  Success criteria: HTTP 200 and error rate under 1 percent.
+proposed_start: "2026-11-20 01:00:00"
+proposed_end: "2026-11-20 03:00:00"
+simulated_now: "2026-10-29 16:00:00"

@@ -1,22 +1,24 @@
-from cm_agents.data.queries import CI, IMPORT_SET, STAGING_TABLE, is_synthetic_ci_name
+from cm_agents.data.queries import (
+    SCENARIO_CORRELATION,
+    counts_in_metrics,
+    metric_change_query,
+    metric_incident_query,
+)
 
 
-def test_ci_query_does_not_use_a_bare_syn_prefix() -> None:
-    assert "nameSTARTSWITHsyn-" in CI
-    assert "name=SYN Online Store" in CI
-    assert "nameSTARTSWITHSYN^" not in CI
-    assert "nameSTARTSWITHSYN " not in CI
-
-
-def test_task_ci_staging_table_is_removed_with_the_other_import_tables() -> None:
-    assert "u_syn_taskci_import" in IMPORT_SET
-    assert "u_syn_taskci_import" in STAGING_TABLE
-    assert "u_syn_std_delete" in IMPORT_SET
-    assert "u_syn_std_delete" in STAGING_TABLE
-
-
-def test_out_of_box_package_names_are_not_synthetic() -> None:
-    assert is_synthetic_ci_name("SYN Online Store")
-    assert is_synthetic_ci_name("syn-shared-sqlclu-prd-01")
-    assert not is_synthetic_ci_name("Synaptics Pointing Device Driver")
-    assert not is_synthetic_ci_name("SynthCore")
+def test_phase5_metrics_count_seed_prefixes_only() -> None:
+    assert counts_in_metrics("SYN-CHG-0001")
+    assert counts_in_metrics("SYN-OPEN-22")
+    assert counts_in_metrics("SYN-REL-store-2026.01.0")
+    assert counts_in_metrics("SYN-INC-0001")
+    assert not counts_in_metrics("SYN-S02-eb66bb0a")
+    assert not counts_in_metrics("SYN-S05-trigger")
+    assert not counts_in_metrics("SYN-" + "ab12cd34ef56")
+    assert metric_change_query() == (
+        "correlation_idSTARTSWITHSYN-CHG-"
+        "^ORcorrelation_idSTARTSWITHSYN-OPEN-"
+        "^ORcorrelation_idSTARTSWITHSYN-REL-"
+    )
+    assert metric_incident_query() == "correlation_idSTARTSWITHSYN-INC-"
+    assert "NOT LIKESYN-CHG-" in SCENARIO_CORRELATION
+    assert "NOT LIKESYN-INC-" in SCENARIO_CORRELATION

@@ -70,6 +70,18 @@ def add_record(manifest: dict[str, Any], table: str, sys_id: str, key: str) -> N
     _append(manifest["records"].setdefault(table, []), sys_id, key)
 
 
+def drop_records(manifest: dict[str, Any], table: str, sys_ids: set[str]) -> None:
+    rows = manifest.get("records", {}).get(table, [])
+    if not isinstance(rows, list):
+        return
+    kept = []
+    for row in rows:
+        if isinstance(row, dict) and str(row.get("sys_id") or "") in sys_ids:
+            continue
+        kept.append(row)
+    manifest["records"][table] = kept
+
+
 def add_artifact(manifest: dict[str, Any], bucket: str, sys_id: str, key: str) -> None:
     _append(manifest[bucket], sys_id, key)
 

@@ -1,0 +1,23 @@
+requester: SYN Service Desk
+summary: SYN Online Store checkout hotfix
+description: Restore checkout after the open P1 incident.
+cis:
+  - syn-store-checkout
+incident: SYN-SCN-S05-trigger
+justification: Checkout is down for customers.
+deployment_method: automated
+deployment_strategy: big bang
+implementation_plan: |
+  Deployment method: AUTOMATED
+  1. Owner: SYN Store DevOps. Deploy the checkout hotfix.
+  2. Restart the checkout service.
+backout_plan: |
+  1. Stop the service.
+  2. Restore the previous build.
+  Trigger: the health check fails. Backout duration: 15 minutes.
+test_plan: |
+  1. Place a test order.
+  Success criteria: HTTP 200 and the order is accepted.
+proposed_start: "2026-11-08 03:00:00"
+proposed_end: "2026-11-08 05:00:00"
+simulated_now: "2026-11-08 03:00:00"

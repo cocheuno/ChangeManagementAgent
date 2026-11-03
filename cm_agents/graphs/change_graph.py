@@ -1,7 +1,9 @@
-"""Change graph through the go/no-go interrupt. Deployment is a later phase.
+"""Change graph through deployment and review.
 
 Authorization interrupts once per approval step. Assess approvals are created
 before Authorize approvals exist, so one interrupt cannot cover both.
+A go decision, an authorized emergency change, and a compliant standard change
+enter deployment. A rejection is recorded in review and is not deployed.
 docs/DISCOVERY.md item 5.
 """
 
@@ -13,7 +15,9 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
 from cm_agents.agents.authorization import finish_standard, record_go_no_go, run_authorization
+from cm_agents.agents.deployment import run_deployment
 from cm_agents.agents.intake import run_intake
+from cm_agents.agents.review import run_review
 from cm_agents.agents.risk import run_risk
 from cm_agents.agents.scheduling import run_scheduling
 from cm_agents.graphs.state import ChangeState
@@ -29,6 +33,9 @@ def build_change_graph(checkpointer: Any) -> Any:
     graph.add_node("authorization", run_authorization)
     graph.add_node("auth_wait", _auth_wait)
     graph.add_node("go_no_go", _go_no_go)
+    graph.add_node("deployment", run_deployment)
+    graph.add_node("rollback_wait", _rollback_wait)
+    graph.add_node("review", run_review)
     graph.add_edge(START, "intake")
     graph.add_conditional_edges(
         "intake",
@@ -41,7 +48,7 @@ def build_change_graph(checkpointer: Any) -> Any:
         _after_schedule,
         {"finish": "finish_standard", "risk": "risk", "end": END},
     )
-    graph.add_edge("finish_standard", END)
+    graph.add_edge("finish_standard", "deployment")
     graph.add_edge("risk", "authorization")
     graph.add_conditional_edges(
         "authorization",
@@ -49,8 +56,8 @@ def build_change_graph(checkpointer: Any) -> Any:
         {
             "authorization": "auth_wait",
             "go_no_go": "go_no_go",
-            "authorized": END,
-            "rejected": END,
+            "authorized": "deployment",
+            "rejected": "review",
             "release_handoff": END,
             "ready": END,
             "recorded": END,
@@ -58,7 +65,18 @@ def build_change_graph(checkpointer: Any) -> Any:
         },
     )
     graph.add_edge("auth_wait", "authorization")
-    graph.add_edge("go_no_go", END)
+    graph.add_conditional_edges(
+        "go_no_go",
+        _after_go,
+        {"deployment": "deployment", "scheduling": "scheduling", "end": END},
+    )
+    graph.add_conditional_edges(
+        "deployment",
+        _after_deployment,
+        {"review": "review", "rollback_wait": "rollback_wait", "end": END},
+    )
+    graph.add_edge("rollback_wait", END)
+    graph.add_edge("review", END)
     return graph.compile(checkpointer=checkpointer)
 
 
@@ -119,6 +137,26 @@ def _auth_wait(state: ChangeState) -> dict[str, Any]:
     return {}
 
 
+def _after_go(state: ChangeState) -> str:
+    choice = str(((state.get("authorization") or {}).get("go_no_go") or {}).get("decision") or "")
+    if choice == "go":
+        return "deployment"
+    if choice == "no-go":
+        return "scheduling"
+    return "end"
+
+
+def _after_deployment(state: ChangeState) -> str:
+    if state.get("error"):
+        return "end"
+    outcome = str((state.get("deployment") or {}).get("outcome") or "")
+    if outcome == "rollback_failed":
+        return "rollback_wait"
+    if outcome in {"verified", "rolled_back"}:
+        return "review"
+    return "end"
+
+
 def _go_no_go(state: ChangeState) -> dict[str, Any]:
     decision = interrupt(
         {
@@ -130,4 +168,16 @@ def _go_no_go(state: ChangeState) -> dict[str, Any]:
     )
     if isinstance(decision, dict) and decision.get("decision"):
         return record_go_no_go(state, decision)
+    return {}
+
+
+def _rollback_wait(state: ChangeState) -> dict[str, Any]:
+    interrupt(
+        {
+            "kind": "rollback_failed",
+            "step": "rollback_failed",
+            "change_number": state.get("change_number") or "",
+            "state": (state.get("deployment") or {}).get("change_state") or "",
+        }
+    )
     return {}

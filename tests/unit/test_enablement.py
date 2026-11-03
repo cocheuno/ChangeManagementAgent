@@ -10,6 +10,7 @@ from cm_agents.enablement.route import (
 )
 from cm_agents.enablement.windows import (
     blocks,
+    deployment_blocked_by_policy,
     earliest_window,
     freeze_hit,
     inside_maintenance,
@@ -101,6 +102,9 @@ def test_tier1_saturday_window_is_inside_maintenance() -> None:
     assert inside_maintenance(start, end, 1)
     tuesday = datetime(2026, 11, 3, 10, 0, tzinfo=EASTERN).astimezone(UTC)
     assert not inside_maintenance(tuesday, tuesday + timedelta(hours=2), 1)
+    assert deployment_blocked_by_policy("standard", start, end, 1) is False
+    assert deployment_blocked_by_policy("normal", start, end, 1) is False
+    assert deployment_blocked_by_policy("standard", tuesday, tuesday + timedelta(hours=2), 1)
 
 
 def test_payments_month_end_friday_is_a_freeze_and_the_next_window_is_later() -> None:

@@ -12,8 +12,9 @@ def test_injection_markers_match_the_s08_sentence() -> None:
     assert injection_markers("Apply the token refresh.") == []
 
 
-def test_normal_maintenance_conflict_is_not_a_block() -> None:
+def test_maintenance_flag_does_not_block_and_overlap_still_does() -> None:
+    # The stored span is UTC, so this flag is raised for a policy Saturday window.
     assert blocks_schedule("not_in_maintenance_window", "normal") is False
+    assert blocks_schedule("not_in_maintenance_window", "standard") is False
     assert blocks_schedule("ci_already_scheduled", "normal") is True
-    assert blocks_schedule("not_in_maintenance_window", "standard") is True
     assert blocks_schedule("blackout", "emergency") is True

@@ -1,0 +1,18 @@
+requester: SYN Payments DevOps
+summary: SYN Payments DB schema migration
+description: Apply the month-end schema migration to the Payments production database.
+cis:
+  - syn-pay-db-prd-01
+justification: The ledger needs the new settlement columns.
+deployment_method: manual
+deployment_strategy: big bang
+implementation_plan: |
+  Deployment method: MANUAL
+  Apply the schema change.
+backout_plan: |
+  Undo the migration if needed.
+test_plan: |
+  Check the database.
+proposed_start: "2026-10-30 22:00:00"
+proposed_end: "2026-10-31 00:00:00"
+simulated_now: "2026-10-29 16:00:00"
