@@ -250,6 +250,67 @@ Phase 2 is Change Enablement (master prompt §10, Phase 2). In addition to its g
 Save the report as docs/phase-reports/phase-2.md, commit locally, and stop.
 ```
 
+**What came back:** Phase 2 committed as `ad52f92`. The gate passed.
+- **Backtest:** failure rates of 0.3% for Low (299 changes), 5.2% for Moderate (833) and 12.0% for High (368). High is 40 times Low, far above the required 3 times.
+- **Plan-quality agreement:** 200 of 200.
+- **Scenarios:** S04 and S08 pass, and the S02 durability test passes.
+- **Risk:** the agent-written risk and impact survived every state up to Scheduled. The Risk Calculator was never called.
+- **Affected CIs:** the integration user attached an affected CI to a new change through the Change API.
+- **Approvals:** the authorization interrupt fires once per approval step. The CAB Approval rows only exist once the change reaches Authorize, so a single interrupt would wait for records that don't exist yet.
+- **Cost:** 60 LLM calls and 127,421 tokens on `grok-4.7`.
+- **Roles:** none added. The integration user can write work notes but can't read them, so `itil` stayed open.
+- **Leftovers:** five scenario changes remain on the instance.
+
+**Accepted,** once the report showed that item 6 (the teardown baseline) was done and tested.
+
+**Two lessons for reuse:**
+- **Perfect agreement on synthetic text** (200 of 200) shows the checklist works on text built to match its labels, not that it handles messy real-world plans.
+- **Records left by scenarios** must be identifiable, or they distort the metrics checked in Phase 5.
+
+---
+
+## Message 7: Start Phase 3 (Deployment and Review agents for standalone changes)
+
+**When:** in a new session, after Phase 2 is published.
+
+**Why each addition to the master prompt's Phase 3 gate:**
+1. **Roles:** the Review agent needs approval comments (S03's CAB rejection reason) and work notes (PIR timelines). The Deployment agent creates incidents (S07). The integration user can do none of these with `sn_change_write` alone.
+2. **Scenario records:** changes created by scenarios would distort the Phase 5 metrics, which must equal the ground truth exactly.
+3. **Maintenance windows:** ServiceNow reported "not in maintenance window" for a time that policy treats as inside the tier-1 window. Phase 3 deploys inside windows, so the rule that governs must be clear.
+4. **Cost:** tracked phase by phase.
+
+```
+Context: this is a new Grok Build session. Phases 0, 1 and 2 are complete and accepted (Phase 2 is ad52f92 on grok-build, followed by my merge commits). Before doing anything, read:
+- prompts/grok-build-change-release-deployment-agents.md (the master prompt; follow it exactly)
+- docs/phase-reports/ (phase-0.md to phase-2.md), docs/DISCOVERY.md and docs/ASSUMPTIONS.md
+- docs/setup/PDI_AND_WORKSTATION_SETUP.md
+
+Environment on this PC:
+- .env in the repo root has all required settings. Load it at runtime; never print, log or commit its values.
+- Before every uv command, make sure UV_PROJECT_ENVIRONMENT is set; if it isn't, set it in that same command: $env:UV_PROJECT_ENVIRONMENT = Join-Path $env:LOCALAPPDATA 'venvs\ChangeManagementAgent'. Never create .venv inside the repository, and never hard-code absolute paths or user names.
+- Only one PC works on this repository at a time.
+First run uv sync, uv run pytest and uv run cm-agents doctor, and show the output. If anything fails, stop.
+
+Phase 3 is Deployment and Review for standalone changes (master prompt §10, Phase 3). In addition to its gate:
+
+1. Roles. Before building the Review and Deployment agents, find the narrowest set of roles that lets the integration user:
+   (a) read work notes and approval comments on SYN changes and their approvals;
+   (b) create and update incidents, including u_caused_by;
+   (c) create and update change tasks.
+   Test candidate roles one at a time, and show the result of each operation for each candidate. Add the minimum to seed, and list each role with the operation that needs it. If nothing narrower than itil works, itil is approved for this PDI. Never grant admin.
+
+2. Scenario records. State how records created by scenarios are marked (for example correlation_id or a short_description prefix), and make sure:
+   (a) teardown removes them;
+   (b) the Phase 5 metrics can never count them.
+   Remove the five scenario changes left from Phase 2 that way, and show 0 remain.
+
+3. Maintenance windows. In S04, ServiceNow returned not_in_maintenance_window for 2026-11-08 03:00 to 05:00 UTC (Saturday 22:00 to Sunday 00:00 ET). Explain why: which schedule the shared cluster CI uses, and its time zone. Record in docs/DISCOVERY.md which check governs a deployment window, policy code or ServiceNow's, and make the Deployment agent's precondition follow it.
+
+4. Cost. Report the total number of LLM calls and tokens for the gate run, taken from the audit log.
+
+Save the report as docs/phase-reports/phase-3.md, commit locally, and stop.
+```
+
 ---
 
 ## After every phase: review checklist
