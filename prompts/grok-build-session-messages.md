@@ -441,6 +441,12 @@ Save the report as docs/phase-reports/phase-4.md, commit locally, and stop.
 
 **Phase 4 accepted,** once the report showed the restore unit tests for the two approved settings.
 
+**Found after acceptance:** the Phase 4 report says the readiness gate returns only the first failure. An unauthorized member is reported alone, "before plan quality, conflicts, freeze, CI ownership, open P1/P2, or release notes". §6.5 requires the interrupt to name *every* failing member and check, so owners can fix everything in one pass.
+- **What's reasonable:** holding back the LLM plan-quality check until the members are authorized saves cost.
+- **What isn't:** holding back the deterministic checks. They cost nothing, so they should all be reported together.
+
+The fix goes into the Phase 6 message. The review missed this because only the summary was read, not the full report. **Lesson:** before accepting a phase, read the full report, not just the summary.
+
 ---
 
 ## Message 10: Start Phase 5 (Metrics and continual improvement)
