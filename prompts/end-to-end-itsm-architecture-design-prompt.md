@@ -1,6 +1,6 @@
 # Architecture Design Prompt: One Autonomous Incident → Problem → Change Workflow
 
-**How to use (for the human, not part of the prompt):** Fill in the three bracketed repository names in §1. Give the assistant read access to all three repositories, then paste everything below the line. The assistant first sends an inventory and its questions and stops. After you answer, it writes the architecture document. It writes no code. The approved document then becomes the input for a phased build prompt, in the same way [`design-request.md`](design-request.md) produced the change master prompt.
+**How to use (for the human, not part of the prompt):** Give the assistant read access to the three repositories named in §1 (all three are public), then paste everything below the line. The assistant first sends an inventory and its questions and stops. After you answer, it writes the architecture document. It writes no code. The approved document then becomes the input for a phased build prompt, in the same way [`design-request.md`](design-request.md) produced the change master prompt.
 
 Decisions already made: agents only at runtime, including approvals · ServiceNow stays the system of record · the three existing agent sets are reused, not rewritten · the repository strategy is an open question the design must answer.
 
@@ -10,7 +10,7 @@ Decisions already made: agents only at runtime, including approvals · ServiceNo
 
 You are a principal architect for agentic systems and an expert in the ITIL 4 practices of **Incident Management**, **Problem Management** and **Change Enablement** (with Release and Deployment Management), and in ServiceNow ITSM.
 
-We have three working agent sets, one per practice, each built separately in its own repository. Design the architecture that joins them into **one automated end-to-end workflow**: an incident arrives, service is restored, the underlying problem is identified and its root cause found, a change request is raised for the fix, the change is assessed, **approved by agents**, deployed and verified, and the problem and its incidents are closed. No human acts inside the running workflow.
+We have three agent sets, one per practice, each built separately in its own repository, by different people, on different stacks and at different stages of completion (§1). Design the architecture that joins them into **one automated end-to-end workflow**: an incident arrives, service is restored, the underlying problem is identified and its root cause found, a change request is raised for the fix, the change is assessed, **approved by agents**, deployed and verified, and the problem and its incidents are closed. No human acts inside the running workflow.
 
 Your deliverable is an **architecture design document**, not code. It must be specific enough that a coding agent can build from it one phase at a time.
 
@@ -18,28 +18,83 @@ Your deliverable is an **architecture design document**, not code. It must be sp
 
 ## 1. Read these first
 
-| Practice | Repository | Notes |
+| Practice | Repository | Branch | Owner |
+|---|---|---|---|
+| Incident Management | `cocheuno/itscm-451z-agent` | `main` | cocheuno |
+| Problem Management | `evebrin/pm-agent` | `main` | evebrin (a different owner) |
+| Change Enablement, Release, Deployment | `cocheuno/ChangeManagementAgent` | `grok-build` | cocheuno |
+
+Read the code in each repository, not only the README. What follows was read from the code on 2026-11-10. Treat it as a starting point and correct it in your inventory wherever the code now says otherwise.
+
+### 1.1 Incident Management: `cocheuno/itscm-451z-agent`
+
+**Read first:** `README.md`, `docs/governance/governance.md`, `src/agent/tools/registry.py`, `src/agent/approvals.py`, `src/agent/tools/writes.py`, `src/agent/tools/schemas/`, `eval/harness.py`, `eval/thresholds.yaml`, `docs/adr/`.
+
+- **Stack:** Python 3.12, `requests`, `pydantic`, no agent framework. Claude through the Anthropic Messages API over raw HTTP. scikit-learn models for incident category, with versioned artifacts under `src/agent/models/`.
+- **It is a governed tool kit, not yet a running workflow.** There is no agent loop or graph that takes an incident from open to resolved. The README lists rungs for a workflow state machine, problem clustering, RFC drafting and CAB, but `src/agent/workflow/` holds only `routing.py` and `sla.py`, and several modules still carry `TODO(student)` markers. The design must say what has to be built here before an end-to-end run is possible.
+- **What exists:**
+  - Seven tools behind one registry: `classify_incident`, `search_kb`, `lookup_ci`, `find_similar_incidents` (tier `read`); `add_comment` (tier `propose`); `assign_incident` and `resolve_incident` (tier `execute_with_approval`).
+  - The tier is declared in each tool's JSON schema and enforced at dispatch, never in a prompt. A fourth tier, `autonomous`, is defined but no tool has it; granting it requires an ADR.
+  - Write tools return a before-image so a write can be rolled back from the audit log.
+  - A priority matrix and SLA targets (`workflow/sla.py`), a category-to-group routing table (`workflow/routing.py`), and a keyword-rule poller (`rung0_poller.py`).
+  - An MCP server that exposes the read-tier tools.
+  - Analytics: KPIs and `analytics/change_impact.py`, which measures whether incident volume rose after a change.
+  - An eval harness that runs on every pull request, with thresholds including `harmful_action_count: 0`, plus failure-injection scenarios.
+- **Human pause point:** a named person approves each proposal with `python -m agent.approvals --approve <id> --as "<name>"`. The approval is bound to the exact tool and arguments and can be spent once. It is stored in a local file, `logs/approvals.jsonl`, **not in ServiceNow**. `AGENT_MODE=dry_run|live` gates all writes.
+- **Audit:** append-only `logs/audit.jsonl`, also local.
+- **ServiceNow:** one service account with `itil` and `itil_admin`. Records are marked by a `[SYN]` prefix on the description and by a `correlation_id` that holds the corpus number and starts with `SYN`.
+- **Data:** a committed synthetic corpus (about 4,200 closed incidents, 150 open, six changes) with a ground-truth file kept outside the repository.
+
+### 1.2 Problem Management: `evebrin/pm-agent`
+
+**Read first:** `ARCHITECTURE.md`, `README.md` (including "Why a state API" and "Deviations from the spec"), `orchestrator.py`, `detection_agent.py`, `rca_agent.py`, `knowledge_agent.py`, `change_agent.py`, `state_api.py`, `config.py`.
+
+- **Stack:** Python 3.11+, `requests` and `python-dotenv` only. No framework and no database. `llm.py` accepts any provider (Anthropic, OpenAI, Gemini, xAI, Ollama, OpenAI-compatible), and every LLM step has a deterministic fallback.
+- **It runs end to end today**, as a linear batch: `synthetic → detect → rca → knowledge → change → close → report`. Each agent is one module with `run(context)` and a `check(context)` that rereads the PDI. State is a JSON file per run, `runs/<run_id>.json`.
+- **Agents:** Problem Detection (groups by CI and service, TF-IDF similarity, at least 5 incidents in 14 days, a confidence level), Root Cause Analysis (5 Whys or Kepner-Tregoe over evidence read from the PDI; cited incidents are checked to be linked), Known Error & KB (publishes a Known Error article and posts the workaround to open incidents), Change & Closure, Reporting.
+- **Human pause points:** four gates answered at the keyboard through `input()`: Gate 1 (is this a problem), Gate 2 (accept the root cause), Gate 3 (approve the change before it is created), Gate 4 (close or keep open). `--auto-approve` answers each gate with the agent's own recommendation and is labeled a rehearsal. That is not an independent decision, so it does not satisfy §3.5.
+- **It overlaps the change repository.** `change_agent.py` drafts a Normal change, creates it, approves the ServiceNow approval rows itself **using the PDI admin account**, and simulates implementation to Closed / Successful. In the combined system this must hand off to the change repository's intake instead. Its recurrence check and closure (Gate 4) stay with Problem Management.
+- **ServiceNow:**
+  - Incidents link to their problem through `incident.parent`, because that PDI had no `incident.problem_id`. The problem links to its change through `problem.rfc`.
+  - `problem.state` is read-only to the Table API there, so the repository installs its own Scripted REST endpoint (`state_api.py`) to move problem states and publish articles. This is a change to the instance, which the change repository's rules forbid without approval.
+  - The integration user has `itil`, `itil_admin`, `user_admin` and `problem_coordinator`. Admin is also used at runtime for approvals and for linking closed incidents.
+  - Records are marked with `correlation_id = PMSYNTH-<run_id>`.
+- **Data:** 200 seeded incidents over 60 days with four planted problems, one decoy burst and noise, plus an answer key. It seeds its own post-change verification window of incidents.
+
+### 1.3 Change Enablement, Release and Deployment: `cocheuno/ChangeManagementAgent`
+
+**Read first:** `prompts/grok-build-change-release-deployment-agents.md` (§1 Core Four rules, §5.2 design principles and §5.5 human-in-the-loop are the conventions the combined system inherits or deliberately changes), `docs/DISCOVERY.md`, `docs/ASSUMPTIONS.md`, `cm_agents/graphs/`, `cm_agents/agents/`, `config/policy.yaml`, `scenarios/`, `tests/live/`.
+
+- **Stack:** Python 3.12, LangGraph with a SQLite checkpointer, Grok through the xAI API, `httpx`, a `cm-agents` CLI. Phases 0 to 5 are built; Phase 6 (hardening) has not started.
+- **Agents:** intake, risk, scheduling, authorization, release, deployment, review, metrics. Graph routing is plain conditional edges. There is no LLM supervisor.
+- **Entry point:** the change graph starts at `run_intake`, which consumes a `request` dictionary. This is where an RFC from Problem Management has to land.
+- **Human pause points:** four interrupts: `requester_info`, `authorization` (once per approval step: the assignment group at Assess, then CAB Approval at Authorize), `go_no_go` and `rollback_failed`. Agents have no tool that writes approval rows. A helper under `tests/` plays the human approver.
+- **ServiceNow:**
+  - The integration user has `sn_change_write`, `audit_viewer` and `sn_incident_write`, and deliberately not `itil` or `admin`.
+  - A failed PROD deployment already opens an incident and links it to the change through `incident.u_caused_by`.
+  - That PDI had no `incident.problem_id`, `incident.rfc` or `incident.caused_by`, and no `rm_release` table.
+  - Records are marked with a `correlation_id` starting `SYN-`; the metrics count only the seed prefixes `SYN-CHG-`, `SYN-OPEN-`, `SYN-REL-` and `SYN-INC-`.
+- **Data:** about 300 CIs and 1,500 historical changes for a fictional company, with `ground_truth.json`.
+
+### 1.4 Conflicts already visible
+
+Your gap analysis must resolve each of these, and add any others you find.
+
+| # | Conflict | Why it matters |
 |---|---|---|
-| Incident Management | `[owner/incident-agent-repo]` | Inventory it yourself |
-| Problem Management | `[owner/problem-agent-repo]` | Inventory it yourself |
-| Change Enablement, Release, Deployment | `cocheuno/ChangeManagementAgent` (branch `grok-build`) | Described below |
-
-For each repository, read the code, not only the README. For the change repository, start with:
-
-- `prompts/grok-build-change-release-deployment-agents.md`: the master prompt. Its §1 (Core Four rules), §5.2 (design principles) and §5.5 (human-in-the-loop) are the conventions the combined system inherits or deliberately changes.
-- `docs/DISCOVERY.md` and `docs/ASSUMPTIONS.md`: what was verified on the ServiceNow PDI. These are facts, not suggestions.
-- `cm_agents/graphs/` (`change_graph.py`, `release_graph.py`, `state.py`, `runner.py`): the LangGraph graphs, their state, and their interrupts.
-- `cm_agents/agents/`: intake, risk, scheduling, authorization, release, deployment, review, metrics.
-- `config/policy.yaml`: governance policy. `scenarios/` and `tests/live/`: the acceptance scenarios.
-
-What is already known about the change repository, so you do not need to rediscover it:
-
-- Python 3.12, LangGraph with a SQLite checkpointer, Grok through the xAI API, `httpx` against the ServiceNow REST APIs, a `cm-agents` CLI.
-- The change graph starts at `run_intake`, which consumes a `request` dictionary. This is where an RFC from Problem Management has to land.
-- Graph routing is plain conditional edges. There is no LLM supervisor.
-- Today the workflow **pauses for humans** at four interrupts: `requester_info`, `authorization` (once per approval step), `go_no_go` and `rollback_failed`. Agents have no tool that writes approval rows. A test helper under `tests/` plays the human approver.
-- A failed PROD deployment already opens an incident and links it to the change through `incident.u_caused_by`.
-- On this PDI, `incident.problem_id`, `incident.rfc` and `incident.caused_by` did not exist, and there is no `rm_release` table. Do not assume the links between incident, problem and change exist. Say how each one will be verified.
+| 1 | The incident repository has no running workflow | The first stage of the end-to-end flow has to be built, not only connected |
+| 2 | Two change implementations: `pm-agent/change_agent.py` and all of `cm_agents` | One must own change creation, approval and deployment |
+| 3 | Three approval mechanisms: a local JSONL queue, keyboard gates, and ServiceNow approval rows | Only ServiceNow approval rows are visible in the system of record |
+| 4 | `pm-agent` approves changes as PDI admin | It breaks separation of duties and the least-privilege model of the change repository |
+| 5 | Three identity models with overlapping broad roles (`itil_admin`, `user_admin`) | §3.5 needs one identity per duty |
+| 6 | `correlation_id` is used three ways, and the incident repository selects its records with "starts with `SYN`" | On a shared PDI the incident seeder's resume query matches the change repository's `SYN-` records; teardown and metrics filters in all three must be checked for the same collision |
+| 7 | Three synthetic worlds: different companies, CIs, groups and answer keys | An incident cannot flow to a problem and a change unless all three share one CMDB and one ground truth |
+| 8 | Three state stores: none, a JSON run file, and LangGraph checkpoints | A case that spans days needs one answer to "where is this case now" |
+| 9 | Batch versus event: `pm-agent` detects over a seeded 60-day batch | The combined flow needs detection to run as incidents arrive |
+| 10 | Three LLM setups (Anthropic over raw HTTP, any provider with fallback, xAI through LangChain) and three `.env` naming schemes | One configuration is needed |
+| 11 | `pm-agent` installs a Scripted REST endpoint; the change repository forbids instance changes | The instance-change rule has to be decided once |
+| 12 | Each PDI was verified separately and they differ | Field and link findings (`parent`, `rfc`, `u_caused_by`) must be re-verified on the one PDI that will be used |
+| 13 | Two owners | A merge needs both owners' agreement and a licence and history decision |
 
 ---
 
@@ -89,7 +144,7 @@ State the practice boundaries the design enforces: Incident Management restores 
 For each handoff, give a versioned schema, the trigger condition as a deterministic rule, the ServiceNow links written, and the idempotency key:
 
 - Incident → Problem (cluster or major incident to problem record).
-- Problem → Change (the RFC: affected CIs, justification, implementation, backout and test plans, deployment method, proposed window, linked problem and incidents). Map it field by field onto the `request` the change intake agent already accepts. Say where plan content comes from, given that no agent may invent it.
+- Problem → Change (the RFC: affected CIs, justification, implementation, backout and test plans, deployment method, proposed window, linked problem and incidents). Map it field by field from what `pm-agent/change_agent.py` drafts today onto the `request` the change intake agent already accepts. Say where plan content comes from, given that no agent may invent it.
 - Change → Problem and Incident (outcome, close code, verification evidence; what closes, what reopens).
 - Deployment failure → Incident (already present as `u_caused_by`; show how it joins the loop).
 
@@ -107,7 +162,7 @@ This is the largest change from the current design, where humans approve. Design
 - **Every other human gate.** Do the same for root-cause confirmation, known-error publication, missing requester information, go/no-go, and a failed rollback: name the replacing agent or automatic stop, its rule, and its record in ServiceNow.
 - **What "held" means.** A held case is a terminal state of the automated run with a complete record of why. State what happens to it next and confirm that no path quietly depends on a human.
 
-List the specific rules in the change repository that this reverses (for example, "agents do not write approval rows") so the reversal is deliberate and documented.
+List the specific rules this reverses in each repository, so the reversal is deliberate and documented: in the change repository, "agents do not write approval rows"; in the incident repository, that no tool holds the `autonomous` tier and that approvals are made by a named person; in the problem repository, the four keyboard gates. Say which existing safeguard carries over: the incident repository's approval bound to exact arguments and spent once, its before-images and its `harmful_action_count: 0` threshold are candidates for the whole system.
 
 ### 3.6 Orchestration and runtime
 - How the three practices are composed: one parent graph with subgraphs, separate graphs started by ServiceNow record events, or a mix. Recommend one and justify it. No LLM supervisor.
@@ -148,7 +203,7 @@ Risks ranked by impact, each with its mitigation. Then the questions only the hu
 
 ## 5. Working protocol
 
-1. **First reply:** the inventory and gap tables (§3.1), your assumptions, and your questions. At minimum ask about: who owns each repository and whether merging is acceptable; whether one PDI serves all three; which LLM provider the combined system uses; the risk appetite for autonomous approval of high-risk and emergency changes; and what should happen to held cases. Then **stop and wait**.
+1. **First reply:** the inventory and gap tables (§3.1), your assumptions, and your questions. At minimum ask about: whether both owners accept a merge or a shared package; whether the incident workflow is to be built in its own repository or in the combined one; whether one PDI serves all three and which synthetic world survives; which LLM provider the combined system uses; the risk appetite for autonomous approval of high-risk and emergency changes; and what should happen to held cases. Then **stop and wait**.
 2. **Second reply:** the full architecture document, written to `docs/architecture/END_TO_END_ITSM.md`, with the decisions and their reasons in a short table at the top.
 3. Write no code and change no existing file in either reply.
 
