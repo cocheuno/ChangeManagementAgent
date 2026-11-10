@@ -32,6 +32,7 @@ These are the values this project actually used. Your own instance will differ.
 | Missing standard incident fields | `incident.caused_by`, `incident.rfc` and `incident.problem_id` don't exist, although Problem Management is active (Part B8) |
 | Custom fields | `incident.u_caused_by` (label "Caused by Change", reference to `change_request`), created by hand on 2026-10-29 (Part B8) |
 | Built-in settings changed by `seed` | `change.conflict.ci_maint_sched` set to `true`, and the demo **Global Infrastructure** maintenance schedule limited to non-synthetic CIs (Phase 3; Part B9) |
+| Unexplained platform change | `glide.db.instant_alter.enabled = true`, written by `admin` on 2026-10-21. Phase 6 found it among the customer updates, with no matching manifest record or approval. Its origin is under investigation (message 12), and it hasn't been changed. |
 | Integration user roles | `sn_change_write`, `audit_viewer` (reads work notes and approval comments; `itil` couldn't), `sn_incident_write` (lets urgency produce a P1) (Phase 3) |
 | Integration user | `syn.svc.change_agents`, created by `seed` in Phase 1 with **Web service access only** |
 | GitHub repository | `cocheuno/ChangeManagementAgent`. Branches: `main` (default), `grok-build` (Grok Build's work), `claude/kind-wozniak-yxtiaz` (where the prompts and these docs were written) |
@@ -137,6 +138,8 @@ No plugin has been activated.
 4. **Check it:**
    `https://devNNNNN.service-now.com/sys_dictionary_list.do?sysparm_query=element%3Du_caused_by`
    **Expected:** one row on `incident`, of type Reference, pointing to `change_request`.
+
+Creating the column also produced its field documentation and an Incident form section. Phase 6 found these in the customer updates and classified them as part of this step.
 
 The agents and metrics use `incident.u_caused_by` wherever the master prompt says `caused_by`; `docs/ASSUMPTIONS.md` records the mapping. `teardown` clears the values along with the synthetic incidents but leaves the field, because the API refuses to delete fields. To remove the field, delete its dictionary entry in the UI as `admin`.
 
