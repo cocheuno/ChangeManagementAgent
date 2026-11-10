@@ -36,23 +36,32 @@ def _member(number: str, state: str, risk: str = "4", ci: str = "syn-store-web")
     }
 
 
-def test_an_unauthorized_member_is_named_before_any_other_check() -> None:
+def test_a_release_reports_every_deterministic_failure_together() -> None:
     members = [
         _member("CHG1001", "-2"),
-        _member("CHG1002", "-3", ci="syn-store-cart"),
+        _member("CHG1002", "-3", ci="syn-pay-api"),
     ]
+    members[0]["checklist"]["ordered_backout"] = False
     failures = readiness_failures(
         members,
         release_service="SYN Online Store",
-        ci_service={"syn-store-web": "SYN Online Store", "syn-store-cart": "SYN Online Store"},
+        ci_service={"syn-store-web": "SYN Online Store", "syn-pay-api": "SYN Payments"},
         blocking_conflicts=["ci_already_scheduled"],
         freeze="SYN Holiday Peak Freeze",
         open_p1_p2=["INC1 priority 1"],
         notes_ready=False,
         check_notes=True,
     )
-    assert failures == ["CHG1002 failed the authorization check: awaiting authorization"]
-    assert "release notes" not in failures[0]
+    assert failures == [
+        "CHG1002 failed the authorization check: awaiting authorization",
+        "plan quality was not checked because a member is awaiting authorization",
+        "CHG1002 failed the service check: syn-pay-api is not in SYN Online Store",
+        "release failed the freeze check: SYN Holiday Peak Freeze",
+        "release failed the conflict check: ci_already_scheduled",
+        "release failed the open incident check: INC1 priority 1",
+        "release failed the release notes check: notes were not generated",
+    ]
+    assert not any("ordered_backout" in item for item in failures)
     assert _after_readiness({"readiness": {"passed": False, "detail": failures[0]}}) == "wait"
 
 

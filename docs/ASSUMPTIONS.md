@@ -64,7 +64,7 @@ If `ground_truth.json` and ServiceNow disagree, neither file nor the instance is
 
 ## Open
 
-Phase 5 metrics are built. Phase 6 has not started. A metrics query uses the seed prefixes, and `counts_in_metrics` is the same test, so the scenario rows cannot enter a count.
+Phase 5 metrics are built. Phase 6 started and stopped before the two full cycles. The readiness gate reports every deterministic failure together, seed maps `cmdb_ci.environment` to Production or Test and leaves stage empty, and seed and teardown reset `var/sim_state.json`. The `sys_update_xml` check found `glide.db.instant_alter.enabled` set to `true` by admin on 2026-10-21. That customer update maps to neither a manifest record nor the two approved settings. The Phase 1 seed is still loaded. A metrics query uses the seed prefixes, and `counts_in_metrics` is the same test, so the scenario rows cannot enter a count.
 
 Phase 4 removed the Phase 3 review rows (`CHG0039417` through `CHG0039421`, `INC0011000`, and `INC0011001`) before S06. The first S06 attempt (`CHG0039422` through `CHG0039426`, thread `SYN-S06-816e63ec`) was removed the same way before the accepted gate. The accepted gate left `CHG0039427` through `CHG0039431` (thread `SYN-S06-cdb4dbcf`). `remove_scenario_records` deletes them. The Phase 1 seed was not torn down.
 

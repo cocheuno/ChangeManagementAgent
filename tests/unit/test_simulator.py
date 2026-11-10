@@ -6,7 +6,9 @@ from cm_agents.deploy.simulator import (
     FAILED,
     HEALTHY,
     RedeployBlocked,
+    installed_version,
     passes_thresholds,
+    reset_state,
     run_deploy,
     run_rollback,
 )
@@ -132,6 +134,31 @@ def test_canary_failure_blocks_a_later_prod_deploy_and_rollback_restores(tmp_pat
     _expect_blocked(path, "SYN-after-rollback", "syn-ful-api", "big bang", "v4")
 
 
+def test_reset_drops_a_recorded_prod_failure(tmp_path: Path) -> None:
+    path = tmp_path / "sim.json"
+    run_deploy(
+        path,
+        thread_id="SYN-fail",
+        ci="syn-ful-api",
+        environment="PROD",
+        strategy="canary",
+        version="v2",
+        fail_at={"env": "PROD", "step": "canary_100"},
+    )
+    reset_state(path)
+    again = run_deploy(
+        path,
+        thread_id="SYN-next",
+        ci="syn-ful-api",
+        environment="PROD",
+        strategy="big bang",
+        version="v3",
+        fail_at=None,
+    )
+    assert again["outcome"] == "verified"
+    assert installed_version(path, "syn-ful-api", "PROD") == "v3"
+
+
 def test_stage_failure_does_not_block_prod(tmp_path: Path) -> None:
     path = tmp_path / "sim.json"
     failed = run_deploy(
@@ -204,6 +231,7 @@ def _assert_rollback(tmp_path: Path, strategy: str, step: str) -> None:
     rolled = run_rollback(path, thread_id="SYN-new", ci=ci, environment="PROD", fail=False)
     assert rolled["outcome"] == "rolled_back"
     assert rolled["version"] == "v1"
+    assert installed_version(path, ci, "PROD") == "v1"
     assert rolled["after"] == HEALTHY
     assert passes_thresholds(HEALTHY, rolled["after"], POLICY)
     _expect_blocked(path, "SYN-later", ci, strategy, "v3")

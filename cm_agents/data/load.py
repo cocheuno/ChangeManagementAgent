@@ -47,6 +47,7 @@ from cm_agents.data.queries import (
     TASK_CI,
     TEMPLATE,
 )
+from cm_agents.deploy.simulator import describe_state, reset_state
 from cm_agents.servicenow.client import ServiceNowClient, ServiceNowError
 from cm_agents.settings import Settings, repo_root
 
@@ -183,11 +184,14 @@ def seed(
     fixtures = generate(seed, anchor=anchor)
     directory = repo_root() / "data" / "synthetic"
     digest = write_fixtures(fixtures, directory)
-    write_ground_truth(build_ground_truth(fixtures), directory)
+    ground_truth = build_ground_truth(fixtures)
+    write_ground_truth(ground_truth, directory)
     _say(f"anchor: {fixtures['anchor']}")
     _say(f"fixture hash: {digest}")
     if dry_run:
         return 0
+    _say(f"simulator state: {describe_state()}")
+    reset_state()
     started = time.perf_counter()
     with ServiceNowClient(
         settings.sn_instance_url,
@@ -197,6 +201,7 @@ def seed(
         timeout=180,
     ) as client:
         created = _load(client, settings, fixtures, directory / "manifest.json", seed)
+        _report_environment(client, fixtures, ground_truth)
     _say(f"load seconds: {time.perf_counter() - started:.1f}")
     _say(f"created: {created}")
     _say("SEED OK")
@@ -1892,6 +1897,35 @@ def _is_true(value: object) -> bool:
 
 def _is_false(value: object) -> bool:
     return str(value).strip().lower() in {"false", "0", "f", "no"}
+
+
+def _report_environment(
+    client: ServiceNowClient, fixtures: dict[str, Any], ground_truth: dict[str, Any]
+) -> None:
+    """Print stored CI environments and deployment frequency against the fixture file."""
+    from cm_agents.agents.metrics import compute_metrics, load_views, parse_stamp
+
+    for label, clause in (
+        ("Production", "environment=Production"),
+        ("Test", "environment=Test"),
+        ("empty", "environmentISEMPTY"),
+    ):
+        _say(f"environment {label}={client.count('cmdb_ci', f'{CI}^{clause}')}")
+    changes, incidents = load_views(client)
+    metrics = compute_metrics(
+        changes,
+        incidents,
+        parse_stamp(str(fixtures["history_start"])),
+        parse_stamp(str(fixtures["anchor"])),
+    )
+    expected = ground_truth["metrics"]["deployment_frequency_per_week"]
+    actual = metrics["deployment_frequency_per_week"]
+    for service in sorted(set(expected) | set(actual)):
+        ground = expected.get(service)
+        observed = actual.get(service)
+        _say(f"frequency {service} ground_truth={ground} servicenow={observed}")
+    if actual != expected:
+        raise SeedError("deployment frequency does not match ground_truth.json")
 
 
 def _say(text: str) -> None:

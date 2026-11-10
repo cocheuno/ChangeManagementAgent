@@ -32,6 +32,27 @@ def default_path() -> Path:
     return repo_root() / "var" / "sim_state.json"
 
 
+def describe_state(path: Path | None = None) -> str:
+    """One line for the cycle log. Versions stay counted, not printed in full."""
+    state = _load(path or default_path())
+    failed = list(state.get("failed_prod") or [])
+    versions = state.get("versions") or {}
+    return f"failed_prod={failed} version_count={len(versions)}"
+
+
+def reset_state(path: Path | None = None) -> None:
+    """Drop simulator state so a later scenario does not inherit a PROD failure."""
+    target = path or default_path()
+    if target.is_file():
+        target.unlink()
+
+
+def installed_version(path: Path, ci: str, environment: str) -> str:
+    state = _load(path)
+    key = f"{ci}|{environment.upper()}"
+    return str((state.get("versions") or {}).get(key) or "")
+
+
 def steps_for(strategy: str) -> tuple[str, ...]:
     key = (strategy or "big bang").strip().lower()
     found = STRATEGIES.get(key)

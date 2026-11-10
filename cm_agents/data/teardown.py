@@ -36,6 +36,7 @@ from cm_agents.data.queries import (
     USER,
     counts_in_metrics,
 )
+from cm_agents.deploy.simulator import describe_state, reset_state
 from cm_agents.servicenow.client import ServiceNowClient, ServiceNowError
 from cm_agents.settings import Settings, repo_root
 
@@ -223,7 +224,29 @@ def _delete_change_children(client: ServiceNowClient, change_id: str) -> None:
             _delete_one(client, table, str(child["sys_id"]))
 
 
+def _print_restored_settings(client: ServiceNowClient, manifest: dict[str, Any]) -> None:
+    """Read back the two approved settings after they are restored."""
+    originals = manifest.get("oob_originals") or {}
+    if not isinstance(originals, dict):
+        raise TeardownError("oob_originals is not an object")
+    for key, row in originals.items():
+        if not isinstance(row, dict):
+            raise TeardownError(f"oob original {key} is not an object")
+        table = str(row.get("table") or "")
+        sys_id = str(row.get("sys_id") or "")
+        field = str(row.get("field") or "")
+        if not table or not sys_id or not field:
+            raise TeardownError(f"oob original {key} is incomplete")
+        stored = client.get_record(table, sys_id, fields=[field])
+        actual = stored.get(field)
+        if actual is None:
+            actual = ""
+        print(f"oob {key} field={field} value={actual!r}", flush=True)
+
+
 def teardown(settings: Settings) -> int:
+    print(f"simulator state: {describe_state()}", flush=True)
+    reset_state()
     path = repo_root() / "data" / "synthetic" / "manifest.json"
     manifest = load_manifest(path)
     if manifest is None:
@@ -262,6 +285,14 @@ def teardown(settings: Settings) -> int:
             restore_oob_originals(client, manifest)
         except OobError as exc:
             raise TeardownError(str(exc)) from None
+        _print_restored_settings(client, manifest)
+        task_count = client.count(
+            "change_task",
+            "change_request.correlation_idSTARTSWITHSYN-",
+        )
+        print(f"change_task on SYN changes={task_count}", flush=True)
+        if task_count:
+            raise TeardownError("change tasks are still present on SYN changes")
         seeded_at = manifest.get("seeded_at")
         _verify(client, baseline, seeded_at if isinstance(seeded_at, str) and seeded_at else None)
         # incident.u_caused_by is a human-made column. Deleting the SYN

@@ -178,6 +178,11 @@ def blocking_conflict_types(rows: list[dict[str, Any]], *, own_ids: set[str]) ->
     return found
 
 
+PLAN_QUALITY_DEFERRED = (
+    "plan quality was not checked because a member is awaiting authorization"
+)
+
+
 def readiness_failures(
     members: list[dict[str, Any]],
     *,
@@ -189,24 +194,27 @@ def readiness_failures(
     notes_ready: bool,
     check_notes: bool,
 ) -> list[str]:
-    """Deterministic readiness failures.
+    """Every deterministic readiness failure, in one list.
 
-    An authorization failure is returned alone, before plan quality, conflicts,
-    incidents, or release notes. The caller generates notes only after the
-    other checks pass, then calls this again with ``check_notes`` true.
+    Plan quality is the LLM check. It runs only after every member is
+    authorized. Until then the list says that the check was not run.
     """
-    pending = authorization_failures(members)
-    if pending:
-        return pending
     failures: list[str] = []
+    pending = authorization_failures(members)
+    failures.extend(pending)
+    if pending:
+        failures.append(PLAN_QUALITY_DEFERRED)
+    else:
+        for member in members:
+            number = str(member.get("number") or "member")
+            if str(member.get("risk") or "") not in _TIER_BY_VALUE:
+                failures.append(f"{number} failed the member risk check: risk is missing")
+            checklist = member.get("checklist") or {}
+            for name in CHECKLIST:
+                if not checklist.get(name):
+                    failures.append(f"{number} failed the plan quality check: {name}")
     for member in members:
         number = str(member.get("number") or "member")
-        if str(member.get("risk") or "") not in _TIER_BY_VALUE:
-            failures.append(f"{number} failed the member risk check: risk is missing")
-        checklist = member.get("checklist") or {}
-        for name in CHECKLIST:
-            if not checklist.get(name):
-                failures.append(f"{number} failed the plan quality check: {name}")
         names = [str(ci) for ci in (member.get("ci_names") or []) if str(ci)]
         if not names:
             failures.append(f"{number} failed the service check: no affected CI")
@@ -271,14 +279,11 @@ def run_readiness(state: dict[str, Any]) -> dict[str, Any]:
         "service_tier": _service_tier(ctx.fixtures, service),
     }
     pending = authorization_failures(members)
-    if pending:
-        return {
-            **base,
-            "readiness": {"passed": False, "detail": "; ".join(pending)},
-        }
-    judged = _judge_members(state, members)
-    for member in members:
-        member["checklist"] = judged[str(member["sys_id"])]
+    judged: dict[str, dict[str, bool]] = {}
+    if not pending:
+        judged = _judge_members(state, members)
+        for member in members:
+            member["checklist"] = judged[str(member["sys_id"])]
     start_text = str(record.get("start_date") or "")
     end_text = str(record.get("end_date") or "")
     if not start_text or not end_text:
@@ -304,6 +309,8 @@ def run_readiness(state: dict[str, Any]) -> dict[str, Any]:
         notes_ready=False,
         check_notes=False,
     )
+    if failures and not notes_ready(version):
+        failures.append("release failed the release notes check: notes were not generated")
     checks = {"member_checks": judged}
     if failures:
         return {
