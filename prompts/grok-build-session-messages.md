@@ -493,6 +493,75 @@ Phase 5 is Metrics and continual improvement (master prompt §10, Phase 5). The 
 Save the report as docs/phase-reports/phase-5.md, commit locally, and stop.
 ```
 
+**What came back:** Phase 5 committed as `15497ec`.
+- **S09 and S10 passed.** 143 unit tests passed, and the live S09 test passed in 84 seconds.
+- **Population:** only seed records count. The period is 2025-10-27 to 2026-10-27 UTC, passed with `--from` and `--to`. 16 of the 20 releases fall inside the change metrics, and the release on-time rate uses all 20.
+- **The disagreement Grok found, and how it was resolved:** the ground truth's deployment frequency counted every change as PROD, because the generator stores the environment as a constant `prod`.
+  - **A Phase 1 seed defect explained the gap:** `cmdb_ci.environment` only accepts Development, Test and Production, so the value `prod` had been stored empty.
+  - **The corrected rule** counts a change as PROD when its CI is in production, or when it is a release. Payments went from 9.1 to 8.7 per week, and HR Portal from 8.1 to 7.8.
+  - **Phase 5 wrote `Production` onto the 184 synthetic PROD CIs.**
+  - **Every other metric was unchanged.**
+- **Independence:** the metrics code and the ground-truth code share only a rounding module, and each has its own median.
+- **The commentary check** rejected a test sentence citing a number not in the table.
+- **Standard change candidates:** all 12 were proposed, and none created.
+- **Cost:** 1 LLM call and 3,373 tokens.
+
+**Phase 5 accepted.** One question went to Phase 6: whether a fresh `seed` writes the CI environment correctly, or only Phase 5's one-time fix did.
+
+**Lesson for reuse:** the "change neither until you know which is wrong" rule worked. The mismatch exposed a real Phase 1 defect (a value the choice list silently dropped), rather than being hidden by adjusting either side.
+
+---
+
+## Message 11: Start Phase 6 (Hardening and handover)
+
+**When:** in a new session, after Phase 5 is published.
+
+**Why each addition to the master prompt's Phase 6 gate:**
+1. **Readiness gate:** the master prompt requires the gate to report every failure at once (found after Phase 4 was accepted).
+2. **CI environment:** Phase 6 reseeds from scratch twice, so the environment fix must live in `seed`, not in a one-time patch.
+3. **Simulator state:** it lives in `var/`, which teardown doesn't touch, so a leftover `failed_prod` could change the next run.
+4. **Seeds and anchor:** with seed 7, the ground truth and anchor differ from seed 42, so every comparison must use that run's own values.
+5. **Configuration evidence:** your own changes (the role in B5, the field in B8) were made as `admin`, so they must be listed separately, or they'd look like unapproved changes.
+6. **Test markers:** the student reusing this project needs one command for offline tests and one for live tests.
+7. **Docs:** they should point to the setup guide rather than repeat it.
+
+```
+Context: this is a new Grok Build session. Phases 0 to 5 are complete and accepted (Phase 5 is 15497ec on grok-build, followed by my merge commits). Before doing anything, read:
+- prompts/grok-build-change-release-deployment-agents.md (the master prompt; follow it exactly)
+- docs/phase-reports/ (phase-0.md to phase-5.md), docs/DISCOVERY.md and docs/ASSUMPTIONS.md
+- docs/setup/PDI_AND_WORKSTATION_SETUP.md
+- prompts/grok-build-session-messages.md (the "Found after acceptance" note under message 9)
+
+Environment on this PC:
+- .env in the repo root has all required settings. Load it at runtime; never print, log or commit its values.
+- Before every uv command, make sure UV_PROJECT_ENVIRONMENT is set; if it isn't, set it in that same command: $env:UV_PROJECT_ENVIRONMENT = Join-Path $env:LOCALAPPDATA 'venvs\ChangeManagementAgent'. Never create .venv inside the repository, and never hard-code absolute paths or user names.
+- Only one PC works on this repository at a time.
+First run uv sync, uv run pytest and uv run cm-agents doctor, and show the output. If anything fails, stop.
+
+Phase 6 is Hardening and handover (master prompt §10, Phase 6). Do items 1 to 4 before running the full gate. In addition to the gate:
+
+1. Readiness gate (found after Phase 4). §6.5 requires the requester_info interrupt to name every failing member and check. Run every deterministic check (authorization, conflicts, freeze, CI ownership, open P1/P2, release notes) and report all failures together. Keeping the LLM plan-quality check until the members are authorized is fine; say so in the interrupt. Add a unit test with a release that fails several checks at once. S06 must still pass.
+
+2. CI environment in seed. Phase 5 wrote Production onto the 184 synthetic PROD CIs on this instance. Make seed itself map the fixture environment to cmdb_ci.environment choices that exist (Production, Test; leave stage empty, as now). After each fresh seed in the gate, print the count per environment value and the deployment frequency per service, compared with ground_truth.json.
+
+3. Simulator state. syn-ful-api is still on failed_prod after S07. Make sure a rolled-back deployment leaves the previous version deployed, that seed or teardown resets var/sim_state.json, and that no scenario depends on state left by an earlier run. Show the simulator state at the start of each full cycle.
+
+4. Live tests. Register a pytest marker named live for every test that needs the PDI or the LLM. Then uv run pytest -m "not live" runs the offline suite, and uv run pytest -m live runs the live tests. Use those commands in the docs.
+
+5. Full cycles. Run teardown → seed → scenario run all twice: once with seed 42 and once with seed 7.
+   - In each cycle, compare S09 and S10 against that cycle's own ground_truth.json, and use the anchor recorded in that cycle's manifest for the metrics period.
+   - After each teardown, show that the two approved settings are back to their originals (change.conflict.ci_maint_sched false; the Global Infrastructure condition empty) and that the change model's tasks are gone with their changes.
+   - Finish with seed 42 loaded and the approved settings applied, so the instance is ready for a demo.
+
+6. Configuration evidence. For the sys_update_xml check, list separately the changes I made by hand as admin (the snc_basic_auth_api_access role grant, and the incident.u_caused_by field; setup guide Parts B5 and B8). Every other entry must map to a manifest record or one of the two approved settings. List anything that maps to neither, and stop.
+
+7. Docs. README.md and docs/RUNBOOK.md link to docs/setup/PDI_AND_WORKSTATION_SETUP.md for setup instead of repeating it. Write the 15-minute demo script around S01 (standard change), S03 (CAB rejection), S07 (failed canary and rollback), S06 (release) and the metrics report, with the command and what to show in ServiceNow for each.
+
+8. Cost and time. Report LLM calls, tokens and latency per scenario, the total for the whole gate, and the wall-clock time of each full cycle.
+
+Save the report as docs/phase-reports/phase-6.md, commit locally, and stop.
+```
+
 ---
 
 ## After every phase: review checklist
