@@ -577,14 +577,14 @@ Save the report as docs/phase-reports/phase-6.md, commit locally, and stop.
 **When:** in the same session, or a new one using the resume template, after Grok stops at item 6.
 
 **Why:**
-- **The unexplained property:** its origin must be shown with evidence (who changed it, when, and whether any project code mentions it) before it's accepted. It shouldn't be reverted on a guess, because it's a platform setting.
+- **The unexplained property:** its origin must be shown with evidence (who changed it, when, and whether any project code mentions it) before it's accepted. It shouldn't be reverted on a guess, because it's a platform setting. The instructor confirmed they didn't change it by hand, so the remaining explanations are project code or the platform itself.
 - **The 461 history rows:** they're this project's own approved objects from earlier cycles, so they can be classified by table and name pattern instead of deleted. Deleting update history would be its own unapproved change.
 - **A config history file:** it makes the next check exact across cycles, instead of relying on name patterns.
 
 ```
 Phase 6, item 6: you were right to stop. Classify the customer updates as follows, then continue Phase 6 from item 5 (the full cycles).
 
-1. glide.db.instant_alter.enabled. Before classifying it, show:
+1. glide.db.instant_alter.enabled. I did not change this setting myself. Before classifying it, show:
    (a) its sys_audit rows: old value, new value, user and time;
    (b) the time of the first write this project made to the instance (the earliest Phase 0 probe);
    (c) the result of searching cm_agents/ and tests/ for "instant_alter".
