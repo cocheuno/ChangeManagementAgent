@@ -562,6 +562,43 @@ Phase 6 is Hardening and handover (master prompt §10, Phase 6). Do items 1 to 4
 Save the report as docs/phase-reports/phase-6.md, commit locally, and stop.
 ```
 
+**What came back:** Grok stopped at item 6 before the full cycles, as instructed, and committed its code changes as `1d32875`. 152 offline tests pass, and `-m "not live"` deselects 14 live tests. The configuration check covered 595 customer updates made by `admin` since 2026-10-20. The integration user made none.
+- **119** match the current manifest.
+- **Expected, and accepted:** the two approved settings; the `u_caused_by` field with its documentation and the Incident form section; the B5 role grant, which has no update row, as expected.
+- **461** are customer-update history of objects this project created and later deleted in earlier cycles (import tables and templates). The manifest only lists the current cycle.
+- **4** are DELETE updates from the Phase 0 `SYN-PROBE` blackout probes.
+- **2** were created on 2026-10-19, before the project started, and later updated by platform jobs.
+- **1 unexplained:** the system property `glide.db.instant_alter.enabled = true`, written by `admin` on 2026-10-21. Nothing in the manifest or the approved list accounts for it.
+
+---
+
+## Message 12: Phase 6, classify the customer updates and continue
+
+**When:** in the same session, or a new one using the resume template, after Grok stops at item 6.
+
+**Why:**
+- **The unexplained property:** its origin must be shown with evidence (who changed it, when, and whether any project code mentions it) before it's accepted. It shouldn't be reverted on a guess, because it's a platform setting. The instructor confirmed they didn't change it by hand, so the remaining explanations are project code or the platform itself.
+- **The 461 history rows:** they're this project's own approved objects from earlier cycles, so they can be classified by table and name pattern instead of deleted. Deleting update history would be its own unapproved change.
+- **A config history file:** it makes the next check exact across cycles, instead of relying on name patterns.
+
+```
+Phase 6, item 6: you were right to stop. Classify the customer updates as follows, then continue Phase 6 from item 5 (the full cycles).
+
+1. glide.db.instant_alter.enabled. I did not change this setting myself. Before classifying it, show:
+   (a) its sys_audit rows: old value, new value, user and time;
+   (b) the time of the first write this project made to the instance (the earliest Phase 0 probe);
+   (c) the result of searching cm_agents/ and tests/ for "instant_alter".
+   If no project code references it, classify it as "changed outside this project's code", record the evidence in docs/DISCOVERY.md, and leave the property unchanged. If any project code references it, stop and tell me.
+
+2. The 461 earlier import and template rows. These are the customer-update history of objects this project created and deleted in earlier cycles. Classify them by table and name pattern (u_syn_ tables, their transform maps and field maps, SYN Standard templates and proposals), and report the count for each category. List any row that fits no category, and stop. Don't delete any sys_update_xml rows.
+
+3. Config history. From now on, keep an append-only config history file next to the manifest (gitignored, and never deleted by teardown) that records every configuration object seed creates or teardown deletes: table, sys_id, name and time. A later check can then map every customer update exactly, across cycles.
+
+4. Accepted as you classified them: the four SYN-PROBE DELETE updates (probe history), the two rows created on 2026-10-19 and updated by platform jobs (before this project started), the two approved settings, the u_caused_by field with its documentation and form section, and the Part B5 role grant (no update row, as expected).
+
+Then run items 5, 7 and 8, save the report as docs/phase-reports/phase-6.md, commit locally, and stop.
+```
+
 ---
 
 ## After every phase: review checklist
