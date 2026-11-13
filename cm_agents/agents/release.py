@@ -98,6 +98,10 @@ class CloseNotes(BaseModel):
     close_notes: str = Field(min_length=1)
 
 
+NOTES_FAILURE = "release failed the release notes check: notes were not generated"
+PLAN_QUALITY_HELD = "plan quality check held until every member is authorized"
+
+
 def resolve_service(token: str) -> str:
     text = token.strip()
     if text in SERVICE_ALIASES:
@@ -151,7 +155,7 @@ def highest_member_tier(values: list[str]) -> str:
 
 
 def authorization_failures(members: list[dict[str, Any]]) -> list[str]:
-    """Members that are not Scheduled. This check is first and does not call a model."""
+    """Members that are not Scheduled. This check does not call a model."""
     if not members:
         return ["release failed the authorization check: no member changes"]
     failures = []
@@ -188,23 +192,21 @@ def readiness_failures(
     open_p1_p2: list[str],
     notes_ready: bool,
     check_notes: bool,
+    plan_quality: bool = True,
 ) -> list[str]:
-    """Deterministic readiness failures.
+    """Every deterministic readiness failure, reported together.
 
-    An authorization failure is returned alone, before plan quality, conflicts,
-    incidents, or release notes. The caller generates notes only after the
-    other checks pass, then calls this again with ``check_notes`` true.
+    ``plan_quality`` is false while a member awaits authorization, because the
+    checklist comes from a model call that is held until then. The caller
+    generates notes only after the other checks pass.
     """
-    pending = authorization_failures(members)
-    if pending:
-        return pending
-    failures: list[str] = []
+    failures = authorization_failures(members)
     for member in members:
         number = str(member.get("number") or "member")
         if str(member.get("risk") or "") not in _TIER_BY_VALUE:
             failures.append(f"{number} failed the member risk check: risk is missing")
         checklist = member.get("checklist") or {}
-        for name in CHECKLIST:
+        for name in CHECKLIST if plan_quality else ():
             if not checklist.get(name):
                 failures.append(f"{number} failed the plan quality check: {name}")
         names = [str(ci) for ci in (member.get("ci_names") or []) if str(ci)]
@@ -224,7 +226,7 @@ def readiness_failures(
     for incident in open_p1_p2:
         failures.append(f"release failed the open incident check: {incident}")
     if check_notes and not notes_ready:
-        failures.append("release failed the release notes check: notes were not generated")
+        failures.append(NOTES_FAILURE)
     return failures
 
 
@@ -270,15 +272,12 @@ def run_readiness(state: dict[str, Any]) -> dict[str, Any]:
         "version": version,
         "service_tier": _service_tier(ctx.fixtures, service),
     }
+    # The plan-quality check calls a model. It is held until every member is authorized.
     pending = authorization_failures(members)
-    if pending:
-        return {
-            **base,
-            "readiness": {"passed": False, "detail": "; ".join(pending)},
-        }
-    judged = _judge_members(state, members)
+    judged = {} if pending else _judge_members(state, members)
     for member in members:
-        member["checklist"] = judged[str(member["sys_id"])]
+        if not pending:
+            member["checklist"] = judged[str(member["sys_id"])]
     start_text = str(record.get("start_date") or "")
     end_text = str(record.get("end_date") or "")
     if not start_text or not end_text:
@@ -301,15 +300,20 @@ def run_readiness(state: dict[str, Any]) -> dict[str, Any]:
         blocking_conflicts=blocking,
         freeze=freeze,
         open_p1_p2=incidents,
-        notes_ready=False,
-        check_notes=False,
+        notes_ready=notes_ready(version),
+        check_notes=True,
+        plan_quality=not pending,
     )
-    checks = {"member_checks": judged}
-    if failures:
+    checks = {"member_checks": judged} if judged else {}
+    # Notes are written below, once every other check has passed.
+    if any(failure != NOTES_FAILURE for failure in failures):
+        detail = "; ".join(failures)
+        if pending:
+            detail += f"; {PLAN_QUALITY_HELD}"
         return {
             **base,
             **checks,
-            "readiness": {"passed": False, "detail": "; ".join(failures)},
+            "readiness": {"passed": False, "detail": detail},
         }
     _write_notes(state, version, service, members)
     if not notes_ready(version):
