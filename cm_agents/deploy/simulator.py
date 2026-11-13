@@ -32,6 +32,20 @@ def default_path() -> Path:
     return repo_root() / "var" / "sim_state.json"
 
 
+def summary(path: Path) -> str:
+    """One line: what is deployed and which PROD deploys are blocked."""
+    state = _load(path)
+    versions = state.get("versions") or {}
+    failed = ", ".join(state.get("failed_prod") or []) or "none"
+    threads = len(state.get("threads") or {})
+    return f"versions={len(versions)} threads={threads} failed_prod={failed}"
+
+
+def reset(path: Path) -> None:
+    """Forget every deployed version, thread, and failure flag."""
+    path.unlink(missing_ok=True)
+
+
 def steps_for(strategy: str) -> tuple[str, ...]:
     key = (strategy or "big bang").strip().lower()
     found = STRATEGIES.get(key)
