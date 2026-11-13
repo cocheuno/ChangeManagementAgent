@@ -7,8 +7,10 @@ from cm_agents.deploy.simulator import (
     HEALTHY,
     RedeployBlocked,
     passes_thresholds,
+    reset,
     run_deploy,
     run_rollback,
+    summary,
 )
 
 POLICY = {
@@ -223,3 +225,32 @@ def _expect_blocked(path: Path, thread_id: str, ci: str, strategy: str, version:
     except RedeployBlocked:
         return
     raise AssertionError(f"PROD deploy for {ci} was not blocked")
+
+
+def test_reset_clears_versions_threads_and_the_failed_prod_flag(tmp_path: Path) -> None:
+    path = tmp_path / "sim.json"
+    run_deploy(
+        path,
+        thread_id="SYN-fail",
+        ci="syn-ful-api",
+        environment="PROD",
+        strategy="canary",
+        version="v2",
+        fail_at={"env": "PROD", "step": "canary_100"},
+    )
+    assert summary(path) == "versions=0 threads=1 failed_prod=syn-ful-api"
+    _expect_blocked(path, "SYN-retry", "syn-ful-api", "canary", "v3")
+    reset(path)
+    assert summary(path) == "versions=0 threads=0 failed_prod=none"
+    again = run_deploy(
+        path,
+        thread_id="SYN-retry",
+        ci="syn-ful-api",
+        environment="PROD",
+        strategy="canary",
+        version="v3",
+        fail_at=None,
+    )
+    assert again["outcome"] == "verified"
+    reset(path)
+    reset(path)

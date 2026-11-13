@@ -36,6 +36,7 @@ from cm_agents.data.queries import (
     USER,
     counts_in_metrics,
 )
+from cm_agents.deploy import simulator
 from cm_agents.servicenow.client import ServiceNowClient, ServiceNowError
 from cm_agents.settings import Settings, repo_root
 
@@ -268,6 +269,10 @@ def teardown(settings: Settings) -> int:
         # incidents clears its values. This does not delete the column.
         _require_caused_by_field(client)
     path.unlink()
+    # The simulator describes deployments onto records that no longer exist.
+    sim_path = simulator.default_path()
+    print(f"simulator state before reset: {simulator.summary(sim_path)}", flush=True)
+    simulator.reset(sim_path)
     print("TEARDOWN OK", flush=True)
     return 0
 
