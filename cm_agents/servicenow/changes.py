@@ -11,6 +11,8 @@ import time
 from typing import Any
 
 from cm_agents.audit import record_audit
+from cm_agents.clock import now
+from cm_agents.data.import_time import UTC
 from cm_agents.data.manifest import add_record, load_manifest, save_manifest
 from cm_agents.servicenow.client import ServiceNowClient, ServiceNowError
 from cm_agents.settings import repo_root
@@ -110,6 +112,28 @@ def create_standard(
 def update_fields(client: ServiceNowClient, sys_id: str, fields: dict[str, Any]) -> dict[str, Any]:
     client.update_record("change_request", sys_id, fields)
     return read_change(client, sys_id)
+
+
+def stamp_actual(client: ServiceNowClient, change_id: str, field: str) -> None:
+    """Write the scenario clock into ``work_start`` or ``work_end``.
+
+    Entering Implement can fill ``work_start`` with the instance clock. The
+    Actual Start/End Date Validation rule aborts an update whose ``work_end``
+    is before that value. Both fields keep the scenario clock. When the stored
+    start is later than the clock, the end update writes both fields.
+    """
+    if field not in {"work_start", "work_end"}:
+        raise ChangeError(f"unsupported actual field {field}")
+    record = read_change(client, change_id)
+    stamp = now().astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S")
+    payload: dict[str, str] = {}
+    if str(record.get(field) or "") != stamp:
+        payload[field] = stamp
+    if field == "work_end" and str(record.get("work_start") or "") > stamp:
+        payload["work_start"] = stamp
+        payload["work_end"] = stamp
+    if payload:
+        update_fields(client, change_id, payload)
 
 
 def write_note(

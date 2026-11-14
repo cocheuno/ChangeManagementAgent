@@ -26,18 +26,25 @@ def test_s09_and_s10_match_ground_truth(capsys) -> None:
     s10 = _scenario("S10.yaml")
     assert s09["from"] == s10["from"]
     assert s09["to"] == s10["to"]
-    truth = json.loads(
-        (repo_root() / "data" / "synthetic" / "ground_truth.json").read_text(encoding="utf-8")
-    )
+    root = repo_root()
+    truth_path = root / "data" / "synthetic" / "ground_truth.json"
+    manifest_path = root / "data" / "synthetic" / "manifest.json"
+    truth = json.loads(truth_path.read_text(encoding="utf-8"))
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    period = truth["period"]
+    assert period["end"] == manifest["anchor"]
+    start = str(period["start"])
+    end = str(period["end"])
+    label = f"{start[:10]}_{end[:10]}"
     finished = run_cli(
         "report",
         "metrics",
         "--period",
-        str(s09["period"]),
+        label,
         "--from",
-        str(s09["from"]),
+        start,
         "--to",
-        str(s09["to"]),
+        end,
     )
     print(finished.stdout)
     assert finished.returncode == 0, finished.stderr
@@ -50,12 +57,12 @@ def test_s09_and_s10_match_ground_truth(capsys) -> None:
     assert comparable == truth["patterns"]["p6"]["signatures"]
     signatures = [row["signature"] for row in payload["candidates"]]
     assert signatures == truth["standard_change_candidates"]
-    report = repo_root() / "reports" / "metrics" / f"{s09['period']}.md"
+    report = repo_root() / "reports" / "metrics" / f"{label}.md"
     text = report.read_text(encoding="utf-8")
     commentary = text.split("## Commentary", 1)[1].split("## Standard change candidates", 1)[0]
     table = {
-        "period_end": s09["to"],
-        "period_start": s09["from"],
+        "period_end": end,
+        "period_start": start,
         **payload["metrics"],
     }
     assert unknown_numbers(commentary, table) == []

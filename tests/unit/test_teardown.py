@@ -7,7 +7,9 @@ from cm_agents.data.teardown import (
     SWEEPS_AFTER_USERS,
     SWEEPS_BEFORE_USERS,
     TeardownError,
+    _clear_orphan_dictionary,
     _sweep,
+    _verify,
     keep_synthetic_user,
 )
 
@@ -67,6 +69,90 @@ def test_teardown_does_not_delete_the_human_caused_by_field() -> None:
     assert "u_caused_by" not in DICTIONARY
     assert ("u_caused_by", "reference", "change_request") in INCIDENT_FIELDS
     assert "u_caused_by" in INCIDENT_CHECK
+
+
+def test_missing_seed_time_does_not_fail_when_only_totals_moved() -> None:
+    class _Counts:
+        def count(self, table: str, query: str | None = None) -> int:
+            if query:
+                return 0
+            return 999
+
+    _verify(_Counts(), {"change_request": 105, "incident": 67}, None)
+
+
+def test_a_recorded_seed_time_still_rejects_a_moved_baseline() -> None:
+    class _Counts:
+        def count(self, table: str, query: str | None = None) -> int:
+            return 0
+
+    with pytest.raises(TeardownError, match="baseline count changed"):
+        _verify(_Counts(), {"change_request": 105}, "2026-10-27 00:00:00")
+
+
+def test_future_dated_demo_rows_are_not_a_deleted_baseline() -> None:
+    class _Counts:
+        def count(self, table: str, query: str | None = None) -> int:
+            if query and "sys_created_on<" in query:
+                return 99
+            if query and "sys_created_on>=" in query:
+                return 7
+            return 0
+
+    _verify(
+        _Counts(),
+        {"change_request": 105},
+        "2026-11-13 16:30:38",
+        {"change_request": 6},
+    )
+
+
+def test_a_missing_future_dated_row_still_fails() -> None:
+    class _Counts:
+        def count(self, table: str, query: str | None = None) -> int:
+            if query and "sys_created_on<" in query:
+                return 99
+            if query and "sys_created_on>=" in query:
+                return 5
+            return 0
+
+    with pytest.raises(TeardownError, match="baseline count changed"):
+        _verify(
+            _Counts(),
+            {"change_request": 105},
+            "2026-11-13 16:30:38",
+            {"change_request": 6},
+        )
+
+
+def test_orphan_dictionary_column_is_removed_by_rebuilding_the_table() -> None:
+    class _Client:
+        def __init__(self) -> None:
+            self.dictionary = {"u_syn_inc_import": 1}
+            self.created: list[str] = []
+            self.deleted: list[str] = []
+
+        def count(self, table: str, query: str | None = None) -> int:
+            if table != "sys_dictionary":
+                return 0
+            name = str(query or "").split("=", 1)[-1]
+            return self.dictionary.get(name, 0)
+
+        def create_record(self, table: str, body: dict[str, str]) -> dict[str, str]:
+            assert table == "sys_db_object"
+            assert body["create_access_controls"] == "false"
+            self.created.append(body["name"])
+            return {"sys_id": "rebuilt"}
+
+        def delete_record(self, table: str, sys_id: str) -> None:
+            assert table == "sys_db_object"
+            self.deleted.append(sys_id)
+            self.dictionary["u_syn_inc_import"] = 0
+
+    client = _Client()
+    _clear_orphan_dictionary(client)
+    assert client.created == ["u_syn_inc_import"]
+    assert client.deleted == ["rebuilt"]
 
 
 def test_staging_table_is_dropped_before_its_dictionary_rows() -> None:

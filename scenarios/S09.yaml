@@ -1,5 +1,6 @@
 # S09. Metrics for the 12 months ending at the fixture anchor.
-# The window is history_start through anchor, not the day this report runs.
+# These dates are the original demo window. The live test does not use them.
+# It reads data/synthetic/manifest.json and that cycle's ground_truth.json.
 # docs/ASSUMPTIONS.md records which records each metric counts.
 period: 2025-10-27_2026-10-27
 from: "2025-10-27 00:00:00"
