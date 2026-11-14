@@ -22,15 +22,16 @@ Your deliverable is an **architecture design document**, not code. It must be sp
 |---|---|---|---|
 | Incident Management | `cocheuno/itscm-451z-agent` | `main` | cocheuno |
 | Problem Management | `evebrin/pm-agent` | `main` | evebrin (a different owner) |
-| Change Enablement, Release, Deployment | `cocheuno/ChangeManagementAgent` | `grok-build` | cocheuno |
+| Change Enablement, Release, Deployment | `cocheuno/ChangeManagementAgent` | `main` | cocheuno |
 
-Read the code in each repository, not only the README. What follows was read from the code on 2026-11-10. Treat it as a starting point and correct it in your inventory wherever the code now says otherwise.
+Read the code in each repository, not only the README. What follows was read from the code on 2026-11-14. Treat it as a starting point and correct it in your inventory wherever the code now says otherwise.
 
 ### 1.1 Incident Management: `cocheuno/itscm-451z-agent`
 
 **Read first:** `README.md`, `docs/governance/governance.md`, `src/agent/tools/registry.py`, `src/agent/approvals.py`, `src/agent/tools/writes.py`, `src/agent/tools/schemas/`, `eval/harness.py`, `eval/thresholds.yaml`, `docs/adr/`.
 
 - **Stack:** Python 3.12, `requests`, `pydantic`, no agent framework. Claude through the Anthropic Messages API over raw HTTP. scikit-learn models for incident category, with versioned artifacts under `src/agent/models/`.
+- **It is the instructor's course scaffold for a student build.** The `TODO(student)` markers are course exercises, `main` is protected, every change goes through a pull request with CI, and `COURSE_CONTEXT.md` sets rules the design must respect or explicitly ask to change, including "no agent framework before Module 7" and an ADR for every significant decision.
 - **It is a governed tool kit, not yet a running workflow.** There is no agent loop or graph that takes an incident from open to resolved. The README lists rungs for a workflow state machine, problem clustering, RFC drafting and CAB, but `src/agent/workflow/` holds only `routing.py` and `sla.py`, and several modules still carry `TODO(student)` markers. The design must say what has to be built here before an end-to-end run is possible.
 - **What exists:**
   - Seven tools behind one registry: `classify_incident`, `search_kb`, `lookup_ci`, `find_similar_incidents` (tier `read`); `add_comment` (tier `propose`); `assign_incident` and `resolve_incident` (tier `execute_with_approval`).
@@ -43,16 +44,17 @@ Read the code in each repository, not only the README. What follows was read fro
 - **Human pause point:** a named person approves each proposal with `python -m agent.approvals --approve <id> --as "<name>"`. The approval is bound to the exact tool and arguments and can be spent once. It is stored in a local file, `logs/approvals.jsonl`, **not in ServiceNow**. `AGENT_MODE=dry_run|live` gates all writes.
 - **Audit:** append-only `logs/audit.jsonl`, also local.
 - **ServiceNow:** one service account with `itil` and `itil_admin`. Records are marked by a `[SYN]` prefix on the description and by a `correlation_id` that holds the corpus number and starts with `SYN`.
-- **Data:** a committed synthetic corpus (about 4,200 closed incidents, 150 open, six changes) with a ground-truth file kept outside the repository.
+- **Data:** a committed synthetic corpus (about 4,200 closed incidents from March to August 2026, 150 open, six changes) with a ground-truth file kept outside the repository. Its seeded patterns include incident clusters and a change-caused spike: 85 extra Network incidents in the 24 to 72 hours after a standard change, `CHG0030012`. The CMDB has ten CIs.
 
 ### 1.2 Problem Management: `evebrin/pm-agent`
 
 **Read first:** `ARCHITECTURE.md`, `README.md` (including "Why a state API" and "Deviations from the spec"), `orchestrator.py`, `detection_agent.py`, `rca_agent.py`, `knowledge_agent.py`, `change_agent.py`, `state_api.py`, `config.py`.
 
 - **Stack:** Python 3.11+, `requests` and `python-dotenv` only. No framework and no database. `llm.py` accepts any provider (Anthropic, OpenAI, Gemini, xAI, Ollama, OpenAI-compatible), and every LLM step has a deterministic fallback.
+- **It is a student's course project**, owned by a different person.
 - **It runs end to end today**, as a linear batch: `synthetic → detect → rca → knowledge → change → close → report`. Each agent is one module with `run(context)` and a `check(context)` that rereads the PDI. State is a JSON file per run, `runs/<run_id>.json`.
 - **Agents:** Problem Detection (groups by CI and service, TF-IDF similarity, at least 5 incidents in 14 days, a confidence level), Root Cause Analysis (5 Whys or Kepner-Tregoe over evidence read from the PDI; cited incidents are checked to be linked), Known Error & KB (publishes a Known Error article and posts the workaround to open incidents), Change & Closure, Reporting.
-- **Human pause points:** four gates answered at the keyboard through `input()`: Gate 1 (is this a problem), Gate 2 (accept the root cause), Gate 3 (approve the change before it is created), Gate 4 (close or keep open). `--auto-approve` answers each gate with the agent's own recommendation and is labeled a rehearsal. That is not an independent decision, so it does not satisfy §3.5.
+- **Human pause points:** four gates answered at the keyboard through `input()`: Gate 1 (is this a problem), Gate 2 (accept the root cause), Gate 3 (approve the change before it is created), Gate 4 (close or keep open). `--auto-approve` answers each gate with the agent's own recommendation and is labeled a rehearsal. That is not an independent decision, so it does not satisfy §3.5. The repository's own README records why this matters: in the reference run the LLM invented a firmware cause for a problem that had no planted cause, and detection opened two problems that were accidents of the noise generator.
 - **It overlaps the change repository.** `change_agent.py` drafts a Normal change, creates it, approves the ServiceNow approval rows itself **using the PDI admin account**, and simulates implementation to Closed / Successful. In the combined system this must hand off to the change repository's intake instead. Its recurrence check and closure (Gate 4) stay with Problem Management.
 - **ServiceNow:**
   - Incidents link to their problem through `incident.parent`, because that PDI had no `incident.problem_id`. The problem links to its change through `problem.rfc`.
@@ -63,9 +65,9 @@ Read the code in each repository, not only the README. What follows was read fro
 
 ### 1.3 Change Enablement, Release and Deployment: `cocheuno/ChangeManagementAgent`
 
-**Read first:** `prompts/grok-build-change-release-deployment-agents.md` (§1 Core Four rules, §5.2 design principles and §5.5 human-in-the-loop are the conventions the combined system inherits or deliberately changes), `docs/DISCOVERY.md`, `docs/ASSUMPTIONS.md`, `cm_agents/graphs/`, `cm_agents/agents/`, `config/policy.yaml`, `scenarios/`, `tests/live/`.
+**Read first:** `prompts/grok-build-change-release-deployment-agents.md` (§1 Core Four rules, §5.2 design principles and §5.5 human-in-the-loop are the conventions the combined system inherits or deliberately changes), `docs/DISCOVERY.md`, `docs/ASSUMPTIONS.md`, `docs/RUNBOOK.md`, `docs/phase-reports/phase-6.md`, `cm_agents/graphs/`, `cm_agents/agents/`, `config/policy.yaml`, `scenarios/`, `tests/live/`.
 
-- **Stack:** Python 3.12, LangGraph with a SQLite checkpointer, Grok through the xAI API, `httpx`, a `cm-agents` CLI. Phases 0 to 5 are built; Phase 6 (hardening) has not started.
+- **Stack:** Python 3.12, LangGraph with a SQLite checkpointer, Grok through the xAI API, `httpx`, a `cm-agents` CLI. All six phases are built and accepted. `teardown → seed → scenario run all` passed twice against the PDI, with seeds 7 and 42, and S01 to S10 pass. One full cycle takes about an hour.
 - **Agents:** intake, risk, scheduling, authorization, release, deployment, review, metrics. Graph routing is plain conditional edges. There is no LLM supervisor.
 - **Entry point:** the change graph starts at `run_intake`, which consumes a `request` dictionary. This is where an RFC from Problem Management has to land.
 - **Human pause points:** four interrupts: `requester_info`, `authorization` (once per approval step: the assignment group at Assess, then CAB Approval at Authorize), `go_no_go` and `rollback_failed`. Agents have no tool that writes approval rows. A helper under `tests/` plays the human approver.
@@ -74,7 +76,8 @@ Read the code in each repository, not only the README. What follows was read fro
   - A failed PROD deployment already opens an incident and links it to the change through `incident.u_caused_by`.
   - That PDI had no `incident.problem_id`, `incident.rfc` or `incident.caused_by`, and no `rm_release` table.
   - Records are marked with a `correlation_id` starting `SYN-`; the metrics count only the seed prefixes `SYN-CHG-`, `SYN-OPEN-`, `SYN-REL-` and `SYN-INC-`.
-- **Data:** about 300 CIs and 1,500 historical changes for a fictional company, with `ground_truth.json`.
+- **Data:** about 300 CIs and 1,500 historical changes for a fictional company, with `ground_truth.json`. The history is a fixed November 2025 to October 2026 calendar, so the seed must be run with `--anchor 2026-10-27`. Scenarios run on fixed dates in their files, with a simulated clock.
+- **Configuration evidence:** `cm_agents/data/update_xml.py` classifies every customer update against the manifest, and seed and teardown append to a config history file. A combined system needs the same check across all three practices.
 
 ### 1.4 Conflicts already visible
 
