@@ -599,6 +599,65 @@ Phase 6, item 6: you were right to stop. Classify the customer updates as follow
 Then run items 5, 7 and 8, save the report as docs/phase-reports/phase-6.md, commit locally, and stop.
 ```
 
+**What came back:** both full cycles passed, committed as `b8a9265` (fixes) and `aec0d5b` (report).
+- **The cycles:** `teardown → seed → scenario run all` passed for seed 7 and then seed 42. S01 to S09 passed in both, with S10 inside the S09 file. Each seed created 5,095 records. The instance was left on seed 42 with the two approved settings applied.
+- **Time:** a full cycle took 60 to 67 minutes: teardown about 18, seed 18 to 21, scenarios 23 to 28.
+- **Cost:** 131 LLM calls and 378,528 tokens across both cycles, reported per scenario.
+- **A from-scratch seed found a defect the earlier phases could not.** A new schedule span sent with empty `float_day`, `float_week` and `yearly_type` is stored with the defaults 1, 1 and `doy`, so the read-back failed and the first seed stopped. Phase 3 had only corrected existing spans in place. The fix inserts the span and then clears the three fields with an update.
+- **The default anchor no longer works.** The synthetic history is a fixed November 2025 to October 2026 calendar, and the default anchor is the load date. From 2026-11-07 on, plain `cm-agents seed` is refused. Both cycles used `--anchor 2026-10-27`.
+- **`cm-agents scenario run`** was added. The master prompt §7.3 listed it, but it had not been built.
+- **Environment check:** Production 184, Test 42, empty 74 after each seed, and every service's deployment frequency matched that cycle's ground truth.
+- **Configuration check:** 988 customer updates. 120 match the manifest, 2 are the approved settings and 3 are the hand-made field. 863 match none: the unexplained property, two platform-job rows, the four `SYN-PROBE` deletes, and 856 earlier import and template rows classified by table.
+
+**Not yet done:** the evidence for `glide.db.instant_alter.enabled` (item 1) and the config history file (item 3). `docs/DISCOVERY.md` was unchanged, and `README.md` showed `cm-agents seed` without the anchor.
+
+**A branch mix-up to avoid:** while Phase 6 was running on `grok-build`, an offline version of items 1, 3 and 4 was merged into `main` from another session. Both sides had changed the same files. The merge kept the `grok-build` version of all code and tests, because that version had run against the PDI. **Lesson:** only one place changes code at a time. Before starting work anywhere else, check the session messages and the branch for work in progress.
+
+---
+
+## Message 13: Phase 6 review, not accepted yet
+
+**When:** in the same session, after reading the full Phase 6 report.
+
+**Why each item:**
+1. **The property:** Message 12 asked for evidence before classifying it, and the report only said it was still `true`.
+2. **Config history:** without it, the next configuration check still depends on name patterns.
+3. **Discovery:** the schedule-span behaviour changed the seed, so it belongs in `docs/DISCOVERY.md`.
+4. **README:** the first command a new user runs must work.
+
+The cycles were accepted as run, so they were not repeated. Only the offline suite and the configuration check were rerun.
+
+```
+Phase 6 review: not accepted yet. The two cycles are accepted; do not rerun them. Four items remain.
+
+1. glide.db.instant_alter.enabled. Show (a) its sys_audit rows: old value, new value, user and time; (b) the time of the first write this project made to the instance; (c) the result of searching cm_agents/ and tests/ for "instant_alter". If no project code references it, classify it as "changed outside this project's code", record the evidence in docs/DISCOVERY.md, and leave it unchanged. If any project code references it, stop and tell me.
+
+2. Config history. Keep an append-only config history file next to the manifest (gitignored, never deleted by teardown) that records every configuration object seed creates or teardown deletes: table, sys_id, name and time. Say plainly that it cannot cover the 856 earlier rows, and keep their classification by table.
+
+3. docs/DISCOVERY.md. Record that inserting a cmn_schedule_span with empty float_day, float_week and yearly_type stores the defaults 1, 1 and doy, and that an update clears them.
+
+4. README.md. Show the seed command with --anchor 2026-10-27 and one sentence on why, as the runbook does.
+
+Optional: report "member risk is missing" together with the other deterministic readiness failures while a member awaits authorization.
+
+Before starting, merge origin/main into grok-build (it fast-forwards once pull request 6 is merged). Rerun the offline suite and the customer-update check only, update docs/phase-reports/phase-6.md, commit locally, and stop.
+```
+
+**What came back:** all four items, committed as `084b68b`. 174 offline tests pass.
+- **The property** is classified as changed outside this project's code. It was inserted at `2026-10-21 19:44:44` by `admin`, about four hours before the project's first write at `23:56:39`. It has no audit rows, and no project code mentions it. It was left at `true`. Its origin is still unknown; one untested guess is that the platform set it when the `incident.u_caused_by` field was added during setup.
+- **Config history** is `data/synthetic/config_history.jsonl`. It is first written at the next seed or teardown. It cannot cover the 856 earlier rows, which stay classified by table.
+- **The configuration check still exits 1** with the same 863 unmatched rows and no new type. This is accepted.
+- **The readiness gate** now also reports a missing member risk while a member awaits authorization.
+
+Because the readiness gate had changed again, S06 was run once more against the PDI before accepting: `uv run cm-agents scenario run S06` printed `1 passed in 351.32s`.
+
+**Phase 6 accepted.** `grok-build` and `main` are both at `084b68b`. The build is complete.
+
+**Lessons for reuse:**
+- **Rebuild from nothing before calling it done.** The schedule-span defect and the anchor limit only appeared on a full teardown and reseed.
+- **A fixed synthetic calendar expires.** Either pin the anchor in the documented command from the start, or generate the history relative to the anchor.
+- **Rerun the one affected scenario after a late change** to a live path, even a small one. It took six minutes.
+
 ---
 
 ## After every phase: review checklist
