@@ -131,6 +131,25 @@ def test_release_risk_is_the_highest_member_tier_with_no_rubric() -> None:
     assert missing == ["CHG1001 failed the member risk check: risk is missing"]
 
 
+def test_missing_member_risk_is_reported_while_authorization_is_pending() -> None:
+    failures = readiness_failures(
+        [_member("CHG1001", "-3", risk="")],
+        release_service="SYN Online Store",
+        ci_service={"syn-store-web": "SYN Online Store"},
+        blocking_conflicts=[],
+        freeze=None,
+        open_p1_p2=[],
+        notes_ready=True,
+        check_notes=False,
+    )
+    assert failures == [
+        "CHG1001 failed the authorization check: awaiting authorization",
+        "plan quality was not checked because a member is awaiting authorization",
+        "CHG1001 failed the member risk check: risk is missing",
+    ]
+    assert not any("plan quality check:" in item for item in failures)
+
+
 def test_model_tasks_are_not_treated_as_member_tasks() -> None:
     assert (
         unexpected_change_tasks(

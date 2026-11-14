@@ -8,7 +8,7 @@ Before a `uv` command, set `UV_PROJECT_ENVIRONMENT` to the virtual environment p
 
 ## Commands
 
-`cm-agents doctor` checks the instance. `cm-agents seed` loads the synthetic company. `cm-agents teardown` removes it and restores the two approved ServiceNow settings. `cm-agents scenario run S01` runs one scenario. `cm-agents scenario run all` runs S01 through S10. `cm-agents report metrics` writes the metrics report for an explicit period.
+`cm-agents doctor` checks the instance. `cm-agents seed --seed 42 --anchor 2026-10-27` loads the synthetic company. Pass that anchor: the fixed history starts at `2025-11-06 15:00:00` UTC, and midnight on a load date after `2026-11-06` is refused. `cm-agents teardown` removes it and restores the two approved ServiceNow settings. `cm-agents scenario run S01` runs one scenario. `cm-agents scenario run all` runs S01 through S10. `cm-agents report metrics` writes the metrics report for an explicit period.
 
 The operating steps, the seed, and the 15-minute demo are in [docs/RUNBOOK.md](docs/RUNBOOK.md).
 

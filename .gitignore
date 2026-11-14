@@ -1,6 +1,7 @@
 .env
 var/
 reports/
+# Seed output. config_history.jsonl is append-only and stays in this directory.
 data/synthetic/
 *.sqlite
 *.sqlite3

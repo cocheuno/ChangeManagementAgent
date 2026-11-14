@@ -199,21 +199,23 @@ def readiness_failures(
 
     Plan quality is the LLM check. It runs only after every member is
     authorized. Until then the list says that the check was not run.
+    A missing member risk is reported in that same list.
     """
     failures: list[str] = []
     pending = authorization_failures(members)
     failures.extend(pending)
     if pending:
         failures.append(PLAN_QUALITY_DEFERRED)
-    else:
-        for member in members:
-            number = str(member.get("number") or "member")
-            if str(member.get("risk") or "") not in _TIER_BY_VALUE:
-                failures.append(f"{number} failed the member risk check: risk is missing")
-            checklist = member.get("checklist") or {}
-            for name in CHECKLIST:
-                if not checklist.get(name):
-                    failures.append(f"{number} failed the plan quality check: {name}")
+    for member in members:
+        number = str(member.get("number") or "member")
+        if str(member.get("risk") or "") not in _TIER_BY_VALUE:
+            failures.append(f"{number} failed the member risk check: risk is missing")
+        if pending:
+            continue
+        checklist = member.get("checklist") or {}
+        for name in CHECKLIST:
+            if not checklist.get(name):
+                failures.append(f"{number} failed the plan quality check: {name}")
     for member in members:
         number = str(member.get("number") or "member")
         names = [str(ci) for ci in (member.get("ci_names") or []) if str(ci)]

@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from cm_agents.data.batch import BatchError, batch_create
+from cm_agents.data.config_history import record_config, record_documentation, record_matching
 from cm_agents.data.generate import generate, write_fixtures
 from cm_agents.data.ground_truth import build_ground_truth, write_ground_truth
 from cm_agents.data.import_time import to_import_wall
@@ -535,6 +536,7 @@ def _ensure_schedules(
                 {"name": name, "time_zone": "US/Eastern", "type": "maintenance"},
             )
             sys_id = str(created["sys_id"])
+            record_config("create", "cmn_schedule", sys_id, name)
             add_record(manifest, "cmn_schedule", sys_id, name)
             save_manifest(path, manifest)
             stored = client.get_record("cmn_schedule", sys_id, fields=["time_zone"])
@@ -595,6 +597,7 @@ def _ensure_span(
         sys_id = str(created.get("sys_id") or "")
         if not sys_id:
             raise SeedError(f"schedule span was not created: {span['name']}")
+        record_config("create", "cmn_schedule_span", sys_id, span["name"])
         stored = client.get_record("cmn_schedule_span", sys_id, fields=list(body.keys()))
         if not _span_matches(stored, body):
             _clear_span_defaults(client, sys_id, body, span["name"])
@@ -1152,7 +1155,9 @@ def _record_import_set(
     )
     if not sets:
         return
-    add_artifact(manifest, "import_sets", str(sets[0]["sys_id"]), number)
+    import_id = str(sets[0]["sys_id"])
+    _history_import_set(manifest, import_id, number)
+    add_artifact(manifest, "import_sets", import_id, number)
     save_manifest(path, manifest)
 
 
@@ -1175,7 +1180,9 @@ def _label_import_sets(client: ServiceNowClient, manifest: dict[str, Any], path:
             )
         except ServiceNowError:
             pass
-        add_artifact(manifest, "import_sets", sys_id, str(row.get("number") or ""))
+        number = str(row.get("number") or "")
+        _history_import_set(manifest, sys_id, number)
+        add_artifact(manifest, "import_sets", sys_id, number)
     if rows:
         save_manifest(path, manifest)
     stored = client.get_table(
@@ -1217,6 +1224,8 @@ def _ensure_import_table(
         )
         table_name = str(created.get("name") or name)
         add_artifact(manifest, "staging_tables", str(created["sys_id"]), table_name)
+        record_config("create", "sys_db_object", str(created["sys_id"]), table_name)
+        record_documentation(client, table_name)
         save_manifest(path, manifest)
     existing = {
         str(row.get("element"))
@@ -1244,6 +1253,8 @@ def _ensure_import_table(
             body["max_length"] = detail
         created = client.create_record("sys_dictionary", body)
         add_artifact(manifest, "dictionary", str(created["sys_id"]), f"{table_name}.{column}")
+        record_config("create", "sys_dictionary", str(created["sys_id"]), f"{table_name}.{column}")
+        record_documentation(client, table_name, column)
     maps = client.get_table(
         "sys_transform_map",
         query=f"name={label}",
@@ -1268,6 +1279,7 @@ def _ensure_import_table(
         )
         map_id = str(created["sys_id"])
         add_artifact(manifest, "transform_maps", map_id, label)
+        record_config("create", "sys_transform_map", map_id, label)
     stored_map = client.get_record("sys_transform_map", map_id, fields=["run_business_rules"])
     rules = stored_map.get("run_business_rules")
     if not _is_false(rules):
@@ -1299,6 +1311,7 @@ def _ensure_import_table(
             },
         )
         add_artifact(manifest, "field_maps", str(created["sys_id"]), f"{label}.{source}")
+        record_config("create", "sys_transform_entry", str(created["sys_id"]), f"{label}.{source}")
     save_manifest(path, manifest)
     return table_name
 
@@ -1441,7 +1454,9 @@ def _ensure_templates(
             limit=2,
         )
         if existing:
-            _record_template(client, manifest, path, name, str(existing[0]["sys_id"]))
+            _record_template(
+                client, manifest, path, name, str(existing[0]["sys_id"]), created=False
+            )
             _say(f"template present: {name}")
             continue
         _publish_template(client, manifest, path, spec, groups, catalog, category)
@@ -1492,6 +1507,7 @@ def _publish_template(
         },
     )
     proposal_id = str(proposal["sys_id"])
+    record_config("create", "std_change_proposal", proposal_id, name)
     add_record(manifest, "std_change_proposal", proposal_id, name)
     save_manifest(path, manifest)
     client.update_record(
@@ -1499,7 +1515,7 @@ def _publish_template(
         proposal_id,
         {"state": "2", "approval": "approved"},
     )
-    _record_template(client, manifest, path, name, "")
+    _record_template(client, manifest, path, name, "", created=True)
 
 
 def _template_value(spec: dict[str, Any], group_id: str) -> str:
@@ -1525,6 +1541,8 @@ def _record_template(
     path: Path,
     name: str,
     producer_id: str,
+    *,
+    created: bool,
 ) -> None:
     if not producer_id:
         found = client.get_table(
@@ -1576,7 +1594,26 @@ def _record_template(
     add_record(manifest, "std_change_record_producer", producer_id, name)
     add_record(manifest, "std_change_producer_version", str(versions[0]["sys_id"]), name)
     add_record(manifest, "std_change_template", template_id, name)
+    if created:
+        record_config("create", "std_change_record_producer", producer_id, name)
+        record_config(
+            "create", "std_change_producer_version", str(versions[0]["sys_id"]), name
+        )
+        record_config("create", "std_change_template", template_id, name)
+        record_matching(client, "sc_cat_item_catalog", f"sc_cat_item={producer_id}", name)
+        record_matching(client, "sc_cat_item_category", f"sc_cat_item={producer_id}", name)
+        record_matching(client, "sys_template", f"name={name}", name)
     save_manifest(path, manifest)
+
+
+def _history_import_set(manifest: dict[str, Any], sys_id: str, number: str) -> None:
+    """Record an import set the first time this manifest sees it."""
+    recorded = manifest.get("import_sets")
+    if isinstance(recorded, list) and any(
+        isinstance(row, dict) and str(row.get("sys_id") or "") == sys_id for row in recorded
+    ):
+        return
+    record_config("create", "sys_import_set", sys_id, number)
 
 
 def _print_gate(client: ServiceNowClient, fixtures: dict[str, Any]) -> None:

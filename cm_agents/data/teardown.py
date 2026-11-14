@@ -6,6 +6,15 @@ from pathlib import Path
 from typing import Any
 
 from cm_agents.data.batch import BatchError, batch_delete
+from cm_agents.data.config_history import (
+    CONFIG_TABLES,
+    config_row_name,
+    is_config_sys_id,
+    name_fields,
+    record_config,
+    record_documentation,
+    record_matching,
+)
 from cm_agents.data.manifest import drop_records, load_manifest, save_manifest
 from cm_agents.data.oob import OobError, restore_oob_originals
 from cm_agents.data.queries import (
@@ -306,6 +315,9 @@ def teardown(settings: Settings) -> int:
         # incident.u_caused_by is a human-made column. Deleting the SYN
         # incidents clears its values. This does not delete the column.
         _require_caused_by_field(client)
+    # config_history.jsonl is append-only. It sits next to the manifest, it is
+    # gitignored with data/synthetic/, and teardown does not delete it. It
+    # cannot cover the 856 earlier import and template customer updates.
     path.unlink()
     print("TEARDOWN OK", flush=True)
     return 0
@@ -345,7 +357,10 @@ def _clear_orphan_dictionary(client: ServiceNowClient) -> None:
         sys_id = str(created.get("sys_id") or "")
         if not sys_id:
             raise TeardownError(f"could not rebuild staging table {name}")
+        record_config("create", "sys_db_object", sys_id, name)
+        children = _child_config_rows(client, [sys_id])
         client.delete_record("sys_db_object", sys_id)
+        _record_if_gone(client, [("sys_db_object", sys_id, name), *children])
         if client.count("sys_dictionary", f"name={name}"):
             raise TeardownError(f"dictionary rows remain for {name}")
 
@@ -570,6 +585,7 @@ def _delete_standard_catalog(client: ServiceNowClient, manifest: dict[str, objec
     table exists only for that call and is dropped before this function returns.
     """
     ids = _standard_ids(client, manifest)
+    pending = _standard_config_pending(client, manifest, ids)
     if ids:
         _transform_delete_ids(client, ids)
     _drop_template_stage(client)
@@ -577,6 +593,7 @@ def _delete_standard_catalog(client: ServiceNowClient, manifest: dict[str, objec
         for sys_id in ids:
             if _still_there(client, table, sys_id):
                 raise TeardownError(f"could not delete {table}")
+    _record_if_gone(client, pending)
 
 
 def _standard_ids(client: ServiceNowClient, manifest: dict[str, object]) -> list[str]:
@@ -649,7 +666,9 @@ def _transform_delete_ids(client: ServiceNowClient, ids: list[str]) -> None:
         },
     )
     table = str(stage.get("name") or STD_DELETE_STAGE)
-    client.create_record(
+    record_config("create", "sys_db_object", str(stage.get("sys_id") or ""), table)
+    record_documentation(client, table)
+    column = client.create_record(
         "sys_dictionary",
         {
             "name": table,
@@ -660,6 +679,8 @@ def _transform_delete_ids(client: ServiceNowClient, ids: list[str]) -> None:
             "active": "true",
         },
     )
+    record_config("create", "sys_dictionary", str(column.get("sys_id") or ""), f"{table}.u_target")
+    record_documentation(client, table, "u_target")
     transform = client.create_record(
         "sys_transform_map",
         {
@@ -673,7 +694,8 @@ def _transform_delete_ids(client: ServiceNowClient, ids: list[str]) -> None:
             "order": "100",
         },
     )
-    client.create_record(
+    record_config("create", "sys_transform_map", str(transform.get("sys_id") or ""), STD_DELETE_MAP)
+    script_row = client.create_record(
         "sys_transform_script",
         {
             "map": str(transform["sys_id"]),
@@ -683,10 +705,23 @@ def _transform_delete_ids(client: ServiceNowClient, ids: list[str]) -> None:
             "script": script,
         },
     )
+    record_config(
+        "create",
+        "sys_transform_script",
+        str(script_row.get("sys_id") or ""),
+        STD_DELETE_MAP,
+    )
     try:
         client.request("POST", f"/api/now/import/{table}", json={"u_target": ids[0]})
     except ServiceNowError:
         pass
+    record_matching(
+        client,
+        "sys_import_set",
+        f"table_name={table}",
+        table,
+        name_field="number",
+    )
 
 
 def _drop_template_stage(client: ServiceNowClient) -> None:
@@ -714,12 +749,15 @@ def _drop_template_stage(client: ServiceNowClient) -> None:
 
 
 def _delete_quiet(client: ServiceNowClient, table: str, sys_id: str) -> None:
+    pending = _capture_config_deletes(client, table, [sys_id])
+    children = _child_config_rows(client, [sys_id]) if table == "sys_db_object" else []
     try:
         client.delete_record(table, sys_id)
     except ServiceNowError as exc:
         if exc.status_code in {403, 404}:
             return
         raise
+    _record_if_gone(client, [*pending, *children])
 
 
 def _delete_recorded(client: ServiceNowClient, manifest: dict[str, object]) -> None:
@@ -750,6 +788,8 @@ def _delete_recorded(client: ServiceNowClient, manifest: dict[str, object]) -> N
 
 
 def _delete_ids(client: ServiceNowClient, table: str, sys_ids: list[str]) -> None:
+    pending = _capture_config_deletes(client, table, sys_ids)
+    children = _child_config_rows(client, sys_ids) if table == "sys_db_object" else []
     for offset in range(0, len(sys_ids), CHUNK):
         chunk = sys_ids[offset : offset + CHUNK]
         try:
@@ -757,6 +797,146 @@ def _delete_ids(client: ServiceNowClient, table: str, sys_ids: list[str]) -> Non
         except (BatchError, ServiceNowError):
             for sys_id in chunk:
                 _delete_one(client, table, sys_id)
+    _record_if_gone(client, [*pending, *children])
+
+
+def _capture_config_deletes(
+    client: ServiceNowClient, table: str, sys_ids: list[str]
+) -> list[tuple[str, str, str]]:
+    """Names of configuration rows that are still present. Other tables are skipped."""
+    if table not in CONFIG_TABLES:
+        return []
+    found: list[tuple[str, str, str]] = []
+    for sys_id in sys_ids:
+        name = _config_name_if_present(client, table, sys_id)
+        if name is None:
+            continue
+        found.append((table, sys_id, name))
+    return found
+
+
+def _config_name_if_present(client: ServiceNowClient, table: str, sys_id: str) -> str | None:
+    if not is_config_sys_id(table, sys_id):
+        return None
+    fields = ["sys_id", *name_fields(table)]
+    try:
+        row = client.get_record(table, sys_id, fields=fields)
+    except ServiceNowError as exc:
+        if exc.status_code != 400:
+            if exc.status_code in {403, 404}:
+                return None
+            raise
+        try:
+            row = client.get_record(table, sys_id, fields=["sys_id"])
+        except ServiceNowError as retry:
+            if retry.status_code in {400, 403, 404}:
+                return None
+            raise
+    return config_row_name(table, row)
+
+
+def _child_config_rows(
+    client: ServiceNowClient, table_ids: list[str]
+) -> list[tuple[str, str, str]]:
+    """Dictionary and documentation rows that a table drop can remove."""
+    found: list[tuple[str, str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for sys_id in table_ids:
+        if not is_config_sys_id("sys_db_object", sys_id):
+            continue
+        try:
+            row = client.get_record("sys_db_object", sys_id, fields=["name"])
+        except ServiceNowError as exc:
+            if exc.status_code in {400, 403, 404}:
+                continue
+            raise
+        table_name = str(row.get("name") or "")
+        if not table_name:
+            continue
+        for child in ("sys_dictionary", "sys_documentation"):
+            try:
+                rows = client.get_table(
+                    child,
+                    query=f"name={table_name}",
+                    fields=["sys_id", "name", "element"],
+                    limit=200,
+                )
+            except ServiceNowError as exc:
+                if exc.status_code in {400, 403, 404}:
+                    continue
+                raise
+            for item in rows:
+                child_id = str(item.get("sys_id") or "")
+                key = (child, child_id)
+                if not child_id or key in seen:
+                    continue
+                seen.add(key)
+                found.append((child, child_id, config_row_name(child, item)))
+    return found
+
+
+def _record_if_gone(client: ServiceNowClient, rows: list[tuple[str, str, str]]) -> None:
+    for table, sys_id, name in rows:
+        if not is_config_sys_id(table, sys_id):
+            continue
+        if _still_there(client, table, sys_id):
+            continue
+        record_config("delete", table, sys_id, name)
+
+
+def _standard_config_pending(
+    client: ServiceNowClient, manifest: dict[str, object], ids: list[str]
+) -> list[tuple[str, str, str]]:
+    """Names captured before the glide script deletes the standard-template rows."""
+    if not ids:
+        return []
+    names = _manifest_names(manifest)
+    pending: list[tuple[str, str, str]] = []
+    for table, _query in STANDARD_LEFT:
+        for sys_id in ids:
+            if not _still_there(client, table, sys_id):
+                continue
+            pending.append((table, sys_id, names.get(sys_id, "")))
+    for producer_id in ids:
+        if not _still_there(client, "std_change_record_producer", producer_id):
+            continue
+        label = names.get(producer_id, "")
+        for table in ("sc_cat_item_catalog", "sc_cat_item_category"):
+            pending.extend(_linked_config_rows(client, table, f"sc_cat_item={producer_id}", label))
+        if label:
+            pending.extend(_linked_config_rows(client, "sys_template", f"name={label}", label))
+    return pending
+
+
+def _manifest_names(manifest: dict[str, object]) -> dict[str, str]:
+    names: dict[str, str] = {}
+    records = manifest.get("records")
+    if not isinstance(records, dict):
+        return names
+    for rows in records.values():
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if isinstance(row, dict) and row.get("sys_id"):
+                names[str(row["sys_id"])] = str(row.get("key") or "")
+    return names
+
+
+def _linked_config_rows(
+    client: ServiceNowClient, table: str, query: str, name: str
+) -> list[tuple[str, str, str]]:
+    try:
+        rows = client.get_table(table, query=query, fields=["sys_id"], limit=20)
+    except ServiceNowError as exc:
+        if exc.status_code in {400, 403, 404}:
+            return []
+        raise
+    found: list[tuple[str, str, str]] = []
+    for row in rows:
+        sys_id = str(row.get("sys_id") or "")
+        if sys_id:
+            found.append((table, sys_id, name))
+    return found
 
 
 def _delete_one(client: ServiceNowClient, table: str, sys_id: str) -> None:

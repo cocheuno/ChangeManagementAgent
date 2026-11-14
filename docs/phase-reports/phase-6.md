@@ -2,7 +2,7 @@
 
 Status: both full cycles passed. Committed locally on `grok-build`. Not pushed.
 
-The instance is seed 42, anchor `2026-10-27 00:00:00`. There was no teardown after that seed. The approved settings are applied: `change.conflict.ci_maint_sched` is `true`, and the Global Infrastructure maintenance condition is `nameNOT LIKEsyn-`. The manifest still stores the originals `false` and an empty condition. `.env` is not in this commit. `config/policy.yaml` was not changed. `XAI_MODEL` was not changed. The runtime model id in the audit log is `grok-4.7`. The Risk Calculator was not called. Agents do not write approvals. No role was granted. `glide.db.instant_alter.enabled` was not changed. It is still `true`.
+The instance is seed 42, anchor `2026-10-27 00:00:00`. There was no teardown after that seed. The approved settings are applied: `change.conflict.ci_maint_sched` is `true`, and the Global Infrastructure maintenance condition is `nameNOT LIKEsyn-`. The manifest still stores the originals `false` and an empty condition. `.env` is not in this commit. `config/policy.yaml` was not changed. `XAI_MODEL` was not changed. The runtime model id in the audit log is `grok-4.7`. The Risk Calculator was not called. Agents do not write approvals. No role was granted. `glide.db.instant_alter.enabled` was not changed. It is still `true`. The review section classifies it as changed outside this project's code.
 
 ## Preflight
 
@@ -172,7 +172,7 @@ The two approved rows are `change.conflict.ci_maint_sched` and the Global Infras
 
 | What | Rows | Still on the instance |
 |---|---:|---|
-| `glide.db.instant_alter.enabled` | 1 | Yes. Value `true`. Updated `2026-10-21 19:44:44` by admin. Not changed in this phase. |
+| `glide.db.instant_alter.enabled` | 1 | Yes. Value `true`. Inserted `2026-10-21 19:44:44` by admin. `sys_audit` has 0 rows. Changed outside this project's code. Left unchanged. |
 | `taxonomy.category.new_content_job_last_run` | 1 | Yes. A scheduled job updates this out-of-box property. |
 | `pwd_process` `Service-Desk Password Reset for Local ServiceNow` | 1 | The customer update names the out-of-box record. The payload was not printed. |
 | `SYN-PROBE service scope` blackouts | 4 | No. Each customer update is `DELETE`. |
@@ -201,19 +201,20 @@ Gate total: 131 calls, 378528 tokens, 1887522 ms of model latency. Cycle wall cl
 
 ## Files
 
-- `cm_agents/agents/release.py` — every deterministic readiness failure in one list. Plan quality waits for authorization. The review move stamps `work_end` first.
+- `cm_agents/agents/release.py` — every deterministic readiness failure in one list. Plan quality waits for authorization. A missing member risk is reported while a member awaits authorization. The review move stamps `work_end` first.
 - `cm_agents/servicenow/changes.py` — `stamp_actual` writes the scenario clock and pulls a later platform `work_start` back with `work_end`.
 - `cm_agents/agents/deployment.py` — uses `stamp_actual`.
 - `cm_agents/servicenow/client.py` — a dropped GET is retried. A dropped write is not.
-- `cm_agents/data/load.py` — prints simulator state, resets it, compares environment counts and deployment frequency, and clears schedule-span dictionary defaults on insert.
-- `cm_agents/data/teardown.py` — prints simulator state, restores the two settings, counts change tasks, records `baseline_later`, and drops a leftover staging column by rebuilding the table.
+- `cm_agents/data/load.py` — prints simulator state, resets it, compares environment counts and deployment frequency, and clears schedule-span dictionary defaults on insert. A create of a configuration object is appended to the config history.
+- `cm_agents/data/teardown.py` — prints simulator state, restores the two settings, counts change tasks, records `baseline_later`, and drops a leftover staging column by rebuilding the table. A delete of a configuration object is appended to the config history. The history file is not deleted.
+- `cm_agents/data/config_history.py` — append-only `data/synthetic/config_history.jsonl`.
 - `cm_agents/data/manifest.py` — stores `baseline_later`.
 - `cm_agents/deploy/simulator.py` — `describe_state`, `reset_state`, and `installed_version`.
 - `cm_agents/scenarios.py` and `cm_agents/cli.py` — `scenario run`.
 - `cm_agents/data/update_xml.py` — the customer-update classification.
 - `tests/conftest.py`, `tests/unit/test_live_marker.py`, and `pyproject.toml` — the `live` marker.
 - `tests/live/test_s09.py` — the metrics window is the manifest anchor and that cycle's ground truth.
-- `README.md` and `docs/RUNBOOK.md` — setup is a link. The runbook has the demo and the pinned anchor.
+- `README.md` and `docs/RUNBOOK.md` — setup is a link. Both show `cm-agents seed --seed 42 --anchor 2026-10-27` and why that anchor is required.
 - `docs/ASSUMPTIONS.md` — Open records the finished cycles.
 - `docs/phase-reports/phase-6.md` — this report.
 
@@ -226,16 +227,88 @@ No new dependency. `pyproject.toml` gained the pytest marker and the live test p
 ## Deviations
 
 1. The load date 2026-11-14 cannot be the anchor. `SYN-CHG-0001` opens at `2025-11-06 15:00:00`, which is before that date minus 365 days. Both cycles pinned `2026-10-27`. S09 still read the anchor from the manifest.
-2. The customer-update check still returns orphans. They are `glide.db.instant_alter.enabled`, the taxonomy job property, the password-reset process, four deleted `SYN-PROBE` blackouts, and 856 earlier import and template customer updates. No new live configuration type appeared. The property was not reverted, and the ghost rows were not deleted.
+2. The customer-update check still returns orphans. They are `glide.db.instant_alter.enabled` (changed outside this project's code), the taxonomy job property, the password-reset process, four deleted `SYN-PROBE` blackouts, and 856 earlier import and template customer updates. No new live configuration type appeared. The property was left unchanged, and the ghost rows were left in place.
 3. The basic-auth role grant has no `sys_update_xml` row. The live `sys_user_has_role` row is the evidence for Part B5.
 4. One batch delete on the first teardown lost the connection. The helper deleted those rows one at a time, and teardown still passed.
 
 ## Open
 
-`glide.db.instant_alter.enabled` remains `true`. The 856 import and template customer updates remain. Teardown still does not sweep a customer update whose name lacks `u_syn_`.
+`glide.db.instant_alter.enabled` remains `true`. It is classified as changed outside this project's code. The 856 import and template customer updates remain. `data/synthetic/config_history.jsonl` cannot cover those 856 rows. Teardown still does not sweep a customer update whose name lacks `u_syn_`.
 
 The integration user reads work notes and approval comments through `sys_journal_field` with `audit_viewer`. The `change_request.work_notes` field itself stays empty for that user.
 
 ## What this phase did not do
 
-Did not push. Did not start Problem Management. Did not edit `docs/setup/PDI_AND_WORKSTATION_SETUP.md`, `config/policy.yaml`, or `XAI_MODEL`. The risk endpoint was not called. No agent wrote an approval. No plugin was activated. The normal change model was not edited. No role was granted. `glide.db.instant_alter.enabled` was not written. The ghost customer updates were not deleted. The instance was not torn down after seed 42.
+Did not push. Did not start Problem Management. Did not edit `docs/setup/PDI_AND_WORKSTATION_SETUP.md`, `config/policy.yaml`, or `XAI_MODEL`. The risk endpoint was not called. No agent wrote an approval. No plugin was activated. The normal change model was not edited. No role was granted. `glide.db.instant_alter.enabled` was not written. The ghost customer updates were not deleted. The instance was not torn down after seed 42. The review did not rerun the two cycles.
+
+## Review
+
+This review is on `7c97d3f`, the fast-forward of `origin/main` after pull request 6. The two cycles above stay as recorded.
+
+### glide.db.instant_alter.enabled
+
+Classification: changed outside this project's code. The property was left at `true`.
+
+- `sys_properties` has one row, `sys_id` `d3b741c2c3001310aef2be1d0501317e`. `value` is `true`. `sys_created_on` and `sys_updated_on` are both `2026-10-21 19:44:44`. `sys_updated_by` is admin.
+- `sys_audit` for that document key returned 0 rows. There is no audited old value and no audited new value.
+- The customer update `sys_properties_d3b741c2c3001310aef2be1d0501317e` is `INSERT_OR_UPDATE`, created `2026-10-21 19:44:52` by admin, target `glide.db.instant_alter.enabled`. The payload value is `true`, type `boolean`, with those same timestamps. The payload has no old value.
+- The first evidenced project write is the `SYN-PROBE service scope` blackout whose payload `sys_created_on` is `2026-10-21 23:56:39`. Its customer update is a `DELETE` created `2026-10-21 23:56:41`. A `sys_audit` search for `SYN-PROBE` before `2026-10-21 19:44:44` returned 0 rows.
+- A search of `cm_agents/` and `tests/` for `instant_alter` returned no matches.
+
+The same evidence is in `docs/DISCOVERY.md`.
+
+### Config history
+
+`data/synthetic/config_history.jsonl` sits next to the manifest. `.gitignore` ignores `data/synthetic/`. Teardown deletes the manifest and does not delete this file. Each line records one create or one delete: table, `sys_id`, name, and time. Seed appends a line when it creates a configuration object. Teardown appends a line when it deletes one.
+
+This file cannot cover the 856 earlier import and template customer updates. Those objects were created and deleted before the file existed, and this review did not rewrite their `sys_update_xml` rows. Their classification by table stays:
+
+| Table | Rows |
+|---|---:|
+| `sys_transform_entry` | 503 |
+| `sys_transform_map` | 45 |
+| `sys_db_object` | 46 |
+| `sc_cat_item_catalog` | 49 |
+| `sc_cat_item_category` | 49 |
+| `std_change_record_producer` | 49 |
+| `std_change_template` | 49 |
+| `sys_transform_script` | 12 |
+| `sys_template` | 3 |
+| `u_syn_` documentation and dictionary | 51 |
+
+The fresh check splits that last 51 into 48 `sys_documentation` and 3 `sys_dictionary`. This review did not seed or tear down, so the history file is not on disk yet. The next seed or teardown appends to it.
+
+### Schedule span defaults
+
+`docs/DISCOVERY.md` records that inserting a `cmn_schedule_span` with empty `float_day`, `float_week`, and `yearly_type` stores the defaults `1`, `1`, and `doy`, and that the following update clears them.
+
+### README
+
+`README.md` shows `cm-agents seed --seed 42 --anchor 2026-10-27`. The fixed history starts at `2025-11-06 15:00:00` UTC, and midnight on a load date after `2026-11-06` is refused.
+
+### Member risk while authorization is pending
+
+`readiness_failures` reports `{number} failed the member risk check: risk is missing` in the same list as the other deterministic readiness failures while a member awaits authorization. Plan quality stays deferred until every member is authorized. S06 was not run again. Its assertion still looks for `awaiting authorization` inside the detail.
+
+### Offline suite
+
+`uv run pytest -m "not live"` on Python 3.13.2:
+
+```
+collected 188 items / 14 deselected / 174 selected
+================ 174 passed, 14 deselected in 66.15s (0:01:06) ================
+```
+
+### Customer-update check
+
+The check ran again against the seed 42 manifest. It returned exit 1 because orphans remain. The totals match the check after the cycles:
+
+```
+update_xml rows=988
+update_xml hand_made=3
+update_xml approved=2
+update_xml manifest=120
+update_xml orphan=863
+```
+
+The 863 orphans are the same categories: 1 `glide.db.instant_alter.enabled`, 1 taxonomy job property, 1 password-reset process, 4 `SYN-PROBE` blackout deletes, and the 856 rows in the table above. No new live configuration type appeared. The classifier was not changed to hide `instant_alter`.
