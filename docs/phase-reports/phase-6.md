@@ -1,14 +1,12 @@
 # Phase 6 Report: Hardening and handover
 
-Status: stopped before the two full cycles. Committed locally on `grok-build`. Not pushed.
+Status: both full cycles passed. Committed locally on `grok-build`. Not pushed.
 
-The instance is still the Phase 1 seed (`anchor 2026-10-27`). This phase did not run teardown, seed, or `scenario run all`. `.env` is not in this commit. `config/policy.yaml` was not changed. `XAI_MODEL` was not changed. No system property was written. The Risk Calculator was not called. Agents do not write approvals. No role was granted.
-
-The stop is the `sys_update_xml` check. `glide.db.instant_alter.enabled` is `true`. Admin wrote that customer update on 2026-10-21. It maps to neither a manifest record nor the two approved settings, and it is not the role grant or `incident.u_caused_by`.
+The instance is seed 42, anchor `2026-10-27 00:00:00`. There was no teardown after that seed. The approved settings are applied: `change.conflict.ci_maint_sched` is `true`, and the Global Infrastructure maintenance condition is `nameNOT LIKEsyn-`. The manifest still stores the originals `false` and an empty condition. `.env` is not in this commit. `config/policy.yaml` was not changed. `XAI_MODEL` was not changed. The runtime model id in the audit log is `grok-4.7`. The Risk Calculator was not called. Agents do not write approvals. No role was granted. `glide.db.instant_alter.enabled` was not changed. It is still `true`.
 
 ## Preflight
 
-`UV_PROJECT_ENVIRONMENT` was unset. The same command set it to `%LOCALAPPDATA%\venvs\ChangeManagementAgent`. No `.venv` was created in the repository. This is the suite before the Phase 6 code. The audited line landed on the pytest banner. Python for the later runs in this session is 3.13.2. The setup guide says 3.12.6. That guide was not edited.
+`UV_PROJECT_ENVIRONMENT` was unset at the start of the phase. The same command set it to `%LOCALAPPDATA%\venvs\ChangeManagementAgent`. No `.venv` was created in the repository. This is the suite before the Phase 6 code. The audited line landed on the pytest banner. Python for the later runs is 3.13.2. The setup guide says 3.12.6. That guide was not edited.
 
 ```
 UV_PROJECT_ENVIRONMENT=C:\Users\caronet\AppData\Local\venvs\ChangeManagementAgent
@@ -26,92 +24,200 @@ agent user: present
 
 The doctor plugin list matches Phase 4 and Phase 5. Change Success Score stays inactive. The Risk Calculator stays active. ReleaseOps stays inactive. `com.snc.release_management_read_roles` stays active. There is no `rm_release` plugin.
 
-## Offline suite after the Phase 6 code
+## Offline suite
 
 `uv run ruff check cm_agents tests` printed `All checks passed!`.
 
-`uv run pytest -m "not live"`:
+After the first Phase 6 commit, `uv run pytest -m "not live" -q --tb=line`:
 
 ```
 152 passed, 14 deselected in 210.13s (0:03:30)
 ```
 
-The 14 deselected tests are every test under `tests/live`. `uv run pytest` stays offline: a run with no `-m` does not collect that directory. `uv run pytest -m live` collects it. `-m` is not in addopts.
+After the teardown and actual-date fixes, the same command, before either cycle:
 
-## What the code does
+```
+170 passed, 14 deselected in 225.37s (0:03:45)
+```
 
-The readiness interrupt names every deterministic failure in one list: authorization, CI ownership, freeze, conflict, open P1/P2, and release notes. While any member is awaiting authorization, the list says plan quality was not checked. The plan-quality LLM call waits until the members are authorized. `tests/unit/test_release.py` covers a release that fails several checks at once. S06's assertions still require the authorization text. They do not require that text to be the only text. S06 was not run.
+The 14 deselected tests are every test under `tests/live`. `uv run pytest` stays offline. `uv run pytest -m live` collects that directory. `-m` is not in addopts.
 
-Seed writes `Production` and `Test` on `cmdb_ci.environment` and leaves stage empty. After a real load it prints the count of each stored value and the deployment frequency for each service next to that run's `ground_truth.json`. A mismatch raises `SeedError`. Seed was not run.
+The gate's own doctor, immediately before the first teardown:
 
-A rolled-back deploy leaves the previous version installed. `tests/unit/test_simulator.py` covers that, and it covers `reset_state` clearing a recorded PROD failure so a later deploy can proceed. Seed and teardown print `var/sim_state.json` and then delete it. Teardown then restores the two approved settings, prints the read-back, and counts `change_task` rows on `SYN-` changes. Teardown was not run.
+```
+admin login: ok
+instance build: glide.buildname and glide.buildtag were not found; glide.war=glide-australia-02-11-2026__patch3-05-25-2026_06-12-2026_1106.zip
+agent user: present
+```
 
-`cm-agents scenario run all` runs S01, the closed S02 outcome, then S03 through S09. S10 is the same test as S09, so it runs once. Each passing file is followed by `remove_scenario_records`. `tests/live/test_s09.py` reads `period` from that cycle's `ground_truth.json` and requires `period.end` to equal the manifest anchor. The dates in `scenarios/S09.yaml` and `scenarios/S10.yaml` stay the original demo window.
+That step exited 0 in 17.1 seconds. The plugin list was the same.
 
-`README.md` and `docs/RUNBOOK.md` point at `docs/setup/PDI_AND_WORKSTATION_SETUP.md` for setup. The runbook has the 15-minute demo for S01, S03, S07, S06, and the metrics report.
+## Anchor
+
+Midnight UTC on the load date 2026-11-14 is refused. `generate(7)` raised `RuntimeError: anchor does not cover the fixed history calendar (SYN-CHG-0001 opened_at 2025-11-06 15:00:00)`. Both cycles passed `--anchor 2026-10-27`. Each seed printed `anchor: 2026-10-27 00:00:00`. The fixture hashes differ:
+
+```
+seed 7  60112be56cf06df92ca4b9734225b88e9d189479735a9c3bf08a4ff0d6a6ed57
+seed 42 9131ae609660986728b97188837af2b09efd165cd5a9952f5885cf4e9042007d
+```
+
+## Cycles
+
+`CM_AGENTS_RUN` was `phase6-seed7` for the first scenario run and `phase6-seed42` for the second. The gate stopped on a failing step. None failed. The process exited 0.
+
+Cycle seed 7 wall clock was 4037.1 seconds. Teardown 1083.8, seed 1247.7, scenarios 1705.5.
+
+The first teardown printed the simulator, restored the two stored originals, and found no change-model tasks left on `SYN-` changes:
+
+```
+simulator state: failed_prod=[] version_count=0
+oob change.conflict.ci_maint_sched field=value value='false'
+oob global_infrastructure_condition field=condition value=''
+change_task on SYN changes=0
+TEARDOWN OK
+```
+
+One `POST /api/now/v1/batch` failed before a response during the `u_syn_chg_import` sweep. The batch helper then deleted those rows one at a time. The SYN counts at the end were 0. `task_ci` printed `before_seed=730 baseline=733 already_later=3 created_after_seed=16`. Those 16 rows are newer than the seed clock and did not fail the check.
+
+Seed 7 then printed:
+
+```
+simulator state: failed_prod=[] version_count=0
+environment Production=184
+environment Test=42
+environment empty=74
+frequency SYN HR Portal ground_truth=7.8 servicenow=7.8
+frequency SYN Online Store ground_truth=7.9 servicenow=7.9
+frequency SYN Order Fulfillment ground_truth=3.1 servicenow=3.1
+frequency SYN Payments ground_truth=8.7 servicenow=8.7
+load seconds: 1226.9
+created: 5095
+SEED OK
+```
+
+`scenario run all` started from `simulator state: failed_prod=[] version_count=0`. S01 through S09 each printed `1 passed`. S10 is the same file as S09. S06's first interrupt named the unauthorized member and the deferred plan-quality check:
+
+```
+detail: CHG0045596 failed the authorization check: awaiting authorization; plan quality was not checked because a member is awaiting authorization
+```
+
+S07 closed unsuccessful, linked the incident, and left the previous failure recorded until the next teardown:
+
+```
+s07 number=CHG0045597 state=3 close_code=unsuccessful
+s07 incident number=INC0011789 u_caused_by=747e7761c3e85f50aef2be1d05013104 change_sys_id=747e7761c3e85f50aef2be1d05013104 priority=3 impact=2 urgency=2
+s07 prod steps=['env=PROD step=canary_10 result=ok', 'env=PROD step=canary_100 result=failed']
+```
+
+S09 and S10 compared ServiceNow with that cycle's `ground_truth.json` for the period ending at the manifest anchor. The test passed in 27.04 seconds. `s09 seed change_task count=0`.
+
+Cycle seed 42 wall clock was 3605.7 seconds. Teardown 1106.1, seed 1103.4, scenarios 1396.2.
+
+The second teardown showed S07's simulator failure and then cleared it:
+
+```
+simulator state: failed_prod=['syn-ful-api'] version_count=19
+oob change.conflict.ci_maint_sched field=value value='false'
+oob global_infrastructure_condition field=condition value=''
+change_task on SYN changes=0
+TEARDOWN OK
+```
+
+Seed 42 printed the same environment counts and the same four frequencies, each matching that cycle's ground truth, then `load seconds: 1097.7`, `created: 5095`, and `SEED OK`. The scenario run again started from an empty simulator file. S01 through S09 each passed. S06 printed:
+
+```
+detail: CHG0047155 failed the authorization check: awaiting authorization; plan quality was not checked because a member is awaiting authorization
+```
+
+S07 printed `CHG0047156` closed `unsuccessful`, with `INC0011955` `u_caused_by` equal to that change. S09 passed in 30.53 seconds. There was no teardown after this seed.
+
+A read after the gate, on `cmn_schedule_maintenance` named Global Infrastructure, returned condition `nameNOT LIKEsyn-`. `change.conflict.ci_maint_sched` read back `true`. The manifest originals are still `false` and `''`.
+
+Both cycles' S09 metrics were:
+
+| Metric | Value |
+|---|---|
+| Success | 93.9 |
+| Failure | 6.1 |
+| Lead time hours | 122.0 |
+| MTTR hours | 4.0 |
+| Release on time | 85.0 |
+| Emergency ratio | 7.8 |
+| Standard share | 43.8 |
+| Success by type | standard 98.0, normal 91.6, emergency 85.3 |
+| Weekly frequency | HR Portal 7.8, Online Store 7.9, Order Fulfillment 3.1, Payments 8.7 |
+| Volume by service | HR Portal 439, Online Store 433, Order Fulfillment 171, Payments 498 |
+| Volume by type | emergency 120, normal 746, standard 675 |
+
+Monthly volume was 128, 131, 127, 127, 130, 130, 125, 129, 123, 122, 122, and 147 from 2025-11 through 2026-10. Each test asserted those numbers against that cycle's own `ground_truth.json`, and `period.end` against the manifest anchor.
 
 ## Configuration evidence
 
-The check queried `sys_update_xml` rows whose `sys_created_by` is the admin user or the integration user, and whose `sys_created_on` or `sys_updated_on` is on or after `2026-10-20 00:00:00`. The count was 595. All 595 are the admin user. The integration user has 0. Payloads were read only to classify a row, and they were not printed.
-
-The run printed:
+The check ran after seed 42, while that manifest was on disk. It queried `sys_update_xml` rows whose `sys_created_by` is the admin user or the integration user, and whose `sys_created_on` or `sys_updated_on` is on or after `2026-10-20 00:00:00`. Payloads were read only to classify a row, and they were not printed.
 
 ```
-update_xml rows=595
-update_xml hand_made=6
+update_xml rows=988
+update_xml hand_made=3
 update_xml approved=2
-update_xml manifest=119
-update_xml orphan=468
+update_xml manifest=120
+update_xml orphan=863
 ```
 
-The two approved rows are the property `change.conflict.ci_maint_sched` (`638460b6b70023008ef6eac7ee11a9f2`) and the Global Infrastructure condition (`0842df2437501000bff8e0f617733483`). The live property value read back as `true`.
+The classifier returns 1 while any orphan remains. The orphan names are the categories already listed when this phase stopped, plus more copies of the same import and template customer updates. No new live configuration type appeared.
 
-Hand-made, listed on their own:
+The two approved rows are `change.conflict.ci_maint_sched` and the Global Infrastructure condition. Hand-made, listed on their own:
 
-- `incident.u_caused_by` (setup guide Part B8). The customer updates are `sys_dictionary_incident_u_caused_by` (target `Incident.Caused by Change`), `sys_documentation_incident_u_caused_by_en` (the same target), and `sys_ui_section_bf1d96e3c0a801640190725e63f8ac80` (target `Incident`). The section row is the incident form. Its payload names the field.
-- `snc_basic_auth_api_access` (setup guide Part B5). One `sys_user_has_role` row exists, created `2026-10-21 23:23:29` by admin, on the admin user. A payload search for `snc_basic_auth_api_access` returned 0 `sys_update_xml` rows, and the grant's sys_id is not in an update name. The grant is live. It has no customer update to map.
-
-The first classifier also marked three seed rows as the incident field because the staging column is named `u_caused_by`: the `u_syn_inc_import` dictionary and documentation rows, and one `sys_transform_entry` whose target is `u_u_caused_by`. The matcher now ignores a `u_syn_` or import-table name, so those three stay with the other seed rows. The unit test covers that. The instance was not queried again after that change.
-
-Rows that map to neither:
+- `incident.u_caused_by` (setup guide Part B8). Three customer updates: target `Incident`, and two with target `Incident.Caused by Change`.
+- `snc_basic_auth_api_access` (setup guide Part B5). One live `sys_user_has_role` row. A payload search returned 0 `sys_update_xml` rows.
 
 | What | Rows | Still on the instance |
 |---|---:|---|
-| `glide.db.instant_alter.enabled` | 1 | Yes. Value `true`. Customer update `INSERT_OR_UPDATE` at `2026-10-21 19:44:52`. Updated by admin at `2026-10-21 19:44:44`. |
-| `SYN-PROBE service scope` blackouts | 4 | No. Each customer update is `DELETE`. `cmn_schedule_blackout` `nameSTARTSWITHSYN-PROBE` returned 0. |
-| Import and template customer updates whose sys_id is not in the current manifest | 461 | The current manifest still has its own copies: 3 staging tables, 45 dictionary rows, 3 transform maps, 45 field maps, and 6 of each standard-change table. These 461 names are earlier copies. |
-| `taxonomy.category.new_content_job_last_run` | 1 | Yes. Value `2026-11-08`. The customer update was created `2026-10-19 19:26:37`, before this window, and a job updated it `2026-11-08 08:00:58`. |
-| `pwd_process` `Service-Desk Password Reset for Local ServiceNow` | 1 | The customer update was created `2026-10-19 19:26:45` and updated `2026-11-09 08:00:55`. The record sys_id is the out-of-box id `4ff0c881bf220100710071a7bf0739fa`. The payload was not printed. |
+| `glide.db.instant_alter.enabled` | 1 | Yes. Value `true`. Updated `2026-10-21 19:44:44` by admin. Not changed in this phase. |
+| `taxonomy.category.new_content_job_last_run` | 1 | Yes. A scheduled job updates this out-of-box property. |
+| `pwd_process` `Service-Desk Password Reset for Local ServiceNow` | 1 | The customer update names the out-of-box record. The payload was not printed. |
+| `SYN-PROBE service scope` blackouts | 4 | No. Each customer update is `DELETE`. |
+| Earlier import and template customer updates | 856 | The current manifest matches its own 120 rows. These names are earlier copies. |
 
-The 461 import and template names are 279 `sys_transform_entry`, 24 `sys_transform_map`, 24 `sys_db_object`, 19 `sc_cat_item_catalog`, 19 `sc_cat_item_category`, 19 `std_change_record_producer`, 19 `std_change_template`, 5 `sys_transform_script`, 3 `sys_template`, and the `u_syn_` dictionary and documentation rows. The manifest's `update_xml` list is empty. Seed records the record sys_id, and the current copies are the 119 rows that matched. Teardown's update-xml sweep only names `u_syn_` import and delete tables, so a replaced field map's customer update stays behind.
+The 856 names are 503 `sys_transform_entry`, 45 `sys_transform_map`, 46 `sys_db_object`, 49 `sc_cat_item_catalog`, 49 `sc_cat_item_category`, 49 `std_change_record_producer`, 49 `std_change_template`, 12 `sys_transform_script`, 3 `sys_template`, and 51 `u_syn_` documentation and dictionary rows. The count is higher than the 461 seen before the cycles because this gate seeded twice, and teardown does not delete a replaced field map's customer update. They were not deleted.
 
-`glide.db.instant_alter.enabled` is the row that stops this phase. It is a live system property. This phase did not change it, and it is not one of the two approved settings.
+## Cost and time
 
-## Cycles, cost, and time
+From `var/audit.jsonl`, rows with `run` `phase6-seed7` or `phase6-seed42` and a model id. The model id is `grok-4.7`. Older phase runs were not included. The API key is not in the log. Latency is the sum of `latency_ms` on those calls.
 
-Not run. There is no per-scenario token count and no cycle wall clock. `CM_AGENTS_RUN` was not set. The audit log was not summarized.
+| Scenario | Seed 7 calls | Seed 7 tokens | Seed 7 latency ms | Seed 42 calls | Seed 42 tokens | Seed 42 latency ms |
+|---|---:|---:|---:|---:|---:|---:|
+| S01 | 4 | 7524 | 22871 | 5 | 9116 | 24642 |
+| S02 | 6 | 15228 | 68515 | 6 | 15747 | 70281 |
+| S03 | 6 | 23780 | 150862 | 6 | 21570 | 124668 |
+| S04 | 8 | 25117 | 138771 | 8 | 24322 | 128205 |
+| S05 | 8 | 26177 | 157667 | 8 | 26027 | 140987 |
+| S06 | 12 | 28410 | 100201 | 18 | 41811 | 171534 |
+| S07 | 8 | 27024 | 136762 | 8 | 27333 | 140811 |
+| S08 | 8 | 24240 | 135082 | 8 | 24075 | 134810 |
+| S09 | 2 | 5665 | 23316 | 2 | 5362 | 17537 |
+| Total | 62 | 183165 | 934047 | 69 | 195363 | 953475 |
+
+Gate total: 131 calls, 378528 tokens, 1887522 ms of model latency. Cycle wall clocks are above: 4037.1 seconds for seed 7 and 3605.7 seconds for seed 42. S09 and S10 share one report invocation, so S10 is inside the S09 row.
 
 ## Files
 
-- `cm_agents/agents/release.py` — every deterministic readiness failure in one list. Plan quality waits for authorization.
-- `tests/unit/test_release.py` — one release fails authorization, CI ownership, freeze, conflict, an open incident, and notes together.
-- `cm_agents/data/load.py` — prints simulator state, resets it, and compares environment counts and deployment frequency with `ground_truth.json`.
-- `cm_agents/data/teardown.py` — prints simulator state, resets it, prints the restored settings, and counts remaining change tasks.
+- `cm_agents/agents/release.py` — every deterministic readiness failure in one list. Plan quality waits for authorization. The review move stamps `work_end` first.
+- `cm_agents/servicenow/changes.py` — `stamp_actual` writes the scenario clock and pulls a later platform `work_start` back with `work_end`.
+- `cm_agents/agents/deployment.py` — uses `stamp_actual`.
+- `cm_agents/servicenow/client.py` — a dropped GET is retried. A dropped write is not.
+- `cm_agents/data/load.py` — prints simulator state, resets it, compares environment counts and deployment frequency, and clears schedule-span dictionary defaults on insert.
+- `cm_agents/data/teardown.py` — prints simulator state, restores the two settings, counts change tasks, records `baseline_later`, and drops a leftover staging column by rebuilding the table.
+- `cm_agents/data/manifest.py` — stores `baseline_later`.
 - `cm_agents/deploy/simulator.py` — `describe_state`, `reset_state`, and `installed_version`.
-- `tests/unit/test_simulator.py` — rollback keeps `v1`, and reset allows a later PROD deploy.
-- `cm_agents/scenarios.py` — `scenario run S01` through `S10`, and `all`.
-- `cm_agents/cli.py` — the `scenario` command.
-- `tests/unit/test_scenarios.py` — `all` runs each scenario file once and stops on the first failure.
+- `cm_agents/scenarios.py` and `cm_agents/cli.py` — `scenario run`.
 - `cm_agents/data/update_xml.py` — the customer-update classification.
-- `tests/unit/test_update_xml.py` — manifest, approved, hand-made, and the staging column.
-- `tests/conftest.py` — marks `tests/live` as `live` and skips that directory when no `-m` is set.
-- `tests/unit/test_live_marker.py` — default and `-m "not live"` omit `test_s01.py`. `-m live` collects it.
-- `pyproject.toml` — `testpaths` includes `tests/live`, and the `live` marker is registered.
+- `tests/conftest.py`, `tests/unit/test_live_marker.py`, and `pyproject.toml` — the `live` marker.
 - `tests/live/test_s09.py` — the metrics window is the manifest anchor and that cycle's ground truth.
-- `scenarios/S09.yaml` and `scenarios/S10.yaml` — comments only. The original dates stay.
-- `README.md` and `docs/RUNBOOK.md` — setup is a link. The runbook has the demo.
-- `docs/ASSUMPTIONS.md` — Open records the stop.
+- `README.md` and `docs/RUNBOOK.md` — setup is a link. The runbook has the demo and the pinned anchor.
+- `docs/ASSUMPTIONS.md` — Open records the finished cycles.
 - `docs/phase-reports/phase-6.md` — this report.
+
+`data/synthetic/`, `reports/`, and `var/` stay gitignored.
 
 ## Dependencies
 
@@ -119,20 +225,17 @@ No new dependency. `pyproject.toml` gained the pytest marker and the live test p
 
 ## Deviations
 
-1. The two full cycles were not run. The customer-update check returned a live system property that maps to neither list.
-2. The basic-auth role grant has no `sys_update_xml` row. The live `sys_user_has_role` row is the evidence for Part B5.
-3. The check's date test includes `sys_updated_on`, so two records created on 2026-10-19 appear because a later job updated them.
+1. The load date 2026-11-14 cannot be the anchor. `SYN-CHG-0001` opens at `2025-11-06 15:00:00`, which is before that date minus 365 days. Both cycles pinned `2026-10-27`. S09 still read the anchor from the manifest.
+2. The customer-update check still returns orphans. They are `glide.db.instant_alter.enabled`, the taxonomy job property, the password-reset process, four deleted `SYN-PROBE` blackouts, and 856 earlier import and template customer updates. No new live configuration type appeared. The property was not reverted, and the ghost rows were not deleted.
+3. The basic-auth role grant has no `sys_update_xml` row. The live `sys_user_has_role` row is the evidence for Part B5.
+4. One batch delete on the first teardown lost the connection. The helper deleted those rows one at a time, and teardown still passed.
 
 ## Open
 
-The cycles stay blocked until `glide.db.instant_alter.enabled` is accepted or reverted. This phase did not revert it.
+`glide.db.instant_alter.enabled` remains `true`. The 856 import and template customer updates remain. Teardown still does not sweep a customer update whose name lacks `u_syn_`.
 
-The 461 earlier import and template customer updates, and the four `SYN-PROBE` delete updates, also map to neither the current manifest nor the two approved settings. The probe blackout rows themselves are gone. Teardown does not sweep those customer updates today.
-
-Phase 4 left `CHG0039427` through `CHG0039431` (thread `SYN-S06-cdb4dbcf`). `remove_scenario_records` deletes them. The Phase 1 seed was not torn down.
-
-`syn-ful-api` can still be on `failed_prod` in `var/sim_state.json` from the earlier S07 run. Seed and teardown now print that state and delete the file. Neither command was run.
+The integration user reads work notes and approval comments through `sys_journal_field` with `audit_viewer`. The `change_request.work_notes` field itself stays empty for that user.
 
 ## What this phase did not do
 
-Stopped after the local commit. The gate `teardown → seed → scenario run all` was not run for seed 7 or seed 42. The instance was not left on a fresh seed 42. `docs/setup/PDI_AND_WORKSTATION_SETUP.md`, `config/policy.yaml`, and `XAI_MODEL` were not edited. The risk endpoint was not called. No agent wrote an approval. No plugin was activated. The normal change model was not edited. No standard template and no proposal was created. No role was granted. No `.venv` was created in the repository.
+Did not push. Did not start Problem Management. Did not edit `docs/setup/PDI_AND_WORKSTATION_SETUP.md`, `config/policy.yaml`, or `XAI_MODEL`. The risk endpoint was not called. No agent wrote an approval. No plugin was activated. The normal change model was not edited. No role was granted. `glide.db.instant_alter.enabled` was not written. The ghost customer updates were not deleted. The instance was not torn down after seed 42.
