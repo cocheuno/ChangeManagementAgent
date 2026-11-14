@@ -40,7 +40,7 @@ from cm_agents.servicenow.changes import (
     move_state,
     read_change,
     remember_row,
-    update_fields,
+    stamp_actual,
     write_note,
 )
 from cm_agents.servicenow.client import ServiceNowClient
@@ -342,11 +342,7 @@ def _summarize(state: dict[str, Any], deployed: dict[str, Any], outcome: str) ->
 
 
 def _stamp(client: ServiceNowClient, change_id: str, field: str) -> None:
-    record = read_change(client, change_id)
-    if str(record.get(field) or ""):
-        return
-    stamp = now().astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S")
-    update_fields(client, change_id, {field: stamp})
+    stamp_actual(client, change_id, field)
 
 
 def _move(client: ServiceNowClient, kind: str, change_id: str, target: str) -> dict[str, Any]:

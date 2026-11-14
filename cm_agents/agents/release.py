@@ -23,7 +23,7 @@ from cm_agents.agents.context import current
 from cm_agents.agents.risk import judge_plans
 from cm_agents.audit import record_audit
 from cm_agents.clock import now
-from cm_agents.data.import_time import UTC, parse_utc
+from cm_agents.data.import_time import parse_utc
 from cm_agents.deploy.simulator import default_path, passes_thresholds, run_deploy, run_rollback
 from cm_agents.enablement.guard import blocks_schedule
 from cm_agents.enablement.risk_score import CHECKLIST, RISK_VALUE, impact_for_tier
@@ -45,6 +45,7 @@ from cm_agents.servicenow.changes import (
     read_change,
     remember_change,
     service_ci,
+    stamp_actual,
     update_fields,
     write_dates,
     write_note,
@@ -96,10 +97,6 @@ class ReleaseNotes(BaseModel):
 
 class CloseNotes(BaseModel):
     close_notes: str = Field(min_length=1)
-
-
-NOTES_FAILURE = "release failed the release notes check: notes were not generated"
-PLAN_QUALITY_HELD = "plan quality check held until every member is authorized"
 
 
 def resolve_service(token: str) -> str:
@@ -155,7 +152,7 @@ def highest_member_tier(values: list[str]) -> str:
 
 
 def authorization_failures(members: list[dict[str, Any]]) -> list[str]:
-    """Members that are not Scheduled. This check does not call a model."""
+    """Members that are not Scheduled. This check is first and does not call a model."""
     if not members:
         return ["release failed the authorization check: no member changes"]
     failures = []
@@ -182,6 +179,11 @@ def blocking_conflict_types(rows: list[dict[str, Any]], *, own_ids: set[str]) ->
     return found
 
 
+PLAN_QUALITY_DEFERRED = (
+    "plan quality was not checked because a member is awaiting authorization"
+)
+
+
 def readiness_failures(
     members: list[dict[str, Any]],
     *,
@@ -192,23 +194,28 @@ def readiness_failures(
     open_p1_p2: list[str],
     notes_ready: bool,
     check_notes: bool,
-    plan_quality: bool = True,
 ) -> list[str]:
-    """Every deterministic readiness failure, reported together.
+    """Every deterministic readiness failure, in one list.
 
-    ``plan_quality`` is false while a member awaits authorization, because the
-    checklist comes from a model call that is held until then. The caller
-    generates notes only after the other checks pass.
+    Plan quality is the LLM check. It runs only after every member is
+    authorized. Until then the list says that the check was not run.
     """
-    failures = authorization_failures(members)
+    failures: list[str] = []
+    pending = authorization_failures(members)
+    failures.extend(pending)
+    if pending:
+        failures.append(PLAN_QUALITY_DEFERRED)
+    else:
+        for member in members:
+            number = str(member.get("number") or "member")
+            if str(member.get("risk") or "") not in _TIER_BY_VALUE:
+                failures.append(f"{number} failed the member risk check: risk is missing")
+            checklist = member.get("checklist") or {}
+            for name in CHECKLIST:
+                if not checklist.get(name):
+                    failures.append(f"{number} failed the plan quality check: {name}")
     for member in members:
         number = str(member.get("number") or "member")
-        if str(member.get("risk") or "") not in _TIER_BY_VALUE:
-            failures.append(f"{number} failed the member risk check: risk is missing")
-        checklist = member.get("checklist") or {}
-        for name in CHECKLIST if plan_quality else ():
-            if not checklist.get(name):
-                failures.append(f"{number} failed the plan quality check: {name}")
         names = [str(ci) for ci in (member.get("ci_names") or []) if str(ci)]
         if not names:
             failures.append(f"{number} failed the service check: no affected CI")
@@ -226,7 +233,7 @@ def readiness_failures(
     for incident in open_p1_p2:
         failures.append(f"release failed the open incident check: {incident}")
     if check_notes and not notes_ready:
-        failures.append(NOTES_FAILURE)
+        failures.append("release failed the release notes check: notes were not generated")
     return failures
 
 
@@ -272,11 +279,11 @@ def run_readiness(state: dict[str, Any]) -> dict[str, Any]:
         "version": version,
         "service_tier": _service_tier(ctx.fixtures, service),
     }
-    # The plan-quality check calls a model. It is held until every member is authorized.
     pending = authorization_failures(members)
-    judged = {} if pending else _judge_members(state, members)
-    for member in members:
-        if not pending:
+    judged: dict[str, dict[str, bool]] = {}
+    if not pending:
+        judged = _judge_members(state, members)
+        for member in members:
             member["checklist"] = judged[str(member["sys_id"])]
     start_text = str(record.get("start_date") or "")
     end_text = str(record.get("end_date") or "")
@@ -300,20 +307,17 @@ def run_readiness(state: dict[str, Any]) -> dict[str, Any]:
         blocking_conflicts=blocking,
         freeze=freeze,
         open_p1_p2=incidents,
-        notes_ready=notes_ready(version),
-        check_notes=True,
-        plan_quality=not pending,
+        notes_ready=False,
+        check_notes=False,
     )
-    checks = {"member_checks": judged} if judged else {}
-    # Notes are written below, once every other check has passed.
-    if any(failure != NOTES_FAILURE for failure in failures):
-        detail = "; ".join(failures)
-        if pending:
-            detail += f"; {PLAN_QUALITY_HELD}"
+    if failures and not notes_ready(version):
+        failures.append("release failed the release notes check: notes were not generated")
+    checks = {"member_checks": judged}
+    if failures:
         return {
             **base,
             **checks,
-            "readiness": {"passed": False, "detail": detail},
+            "readiness": {"passed": False, "detail": "; ".join(failures)},
         }
     _write_notes(state, version, service, members)
     if not notes_ready(version):
@@ -409,6 +413,10 @@ def run_release_deploy(state: dict[str, Any]) -> dict[str, Any]:
                     "change_state": STATE_IMPLEMENT,
                 },
             }
+    # The model writes the instance clock into an empty work_end when the
+    # state becomes Review. Stamp the scenario clock first so that rule does
+    # not leave the actual end before a future actual start.
+    _stamp(ctx.client, state["change_sys_id"], "work_end")
     record = move_state(ctx.client, "normal", state["change_sys_id"], STATE_REVIEW)
     return {
         "deployment": {
@@ -437,13 +445,15 @@ def run_release_close(state: dict[str, Any]) -> dict[str, Any]:
     summary = str(record.get("short_description") or "")
     for member in members:
         _close_member(ctx.client, member, number, summary)
+    # A Review transition that already stored the instance clock has an actual
+    # end before a future scenario start. Repair that pair before close notes.
+    _stamp(ctx.client, state["change_sys_id"], "work_end")
     notes = _release_close_notes(state, number)
     update_fields(
         ctx.client,
         state["change_sys_id"],
         {"close_code": "successful", "close_notes": notes},
     )
-    _stamp(ctx.client, state["change_sys_id"], "work_end")
     closed = move_state(ctx.client, "normal", state["change_sys_id"], STATE_CLOSED)
     if str(closed.get("state") or "") != STATE_CLOSED:
         raise ChangeError(f"release state is {closed.get('state')} after a move to Closed")
@@ -903,8 +913,4 @@ def _release_close_notes(state: dict[str, Any], number: str) -> str:
 
 
 def _stamp(client: ServiceNowClient, change_id: str, field: str) -> None:
-    record = read_change(client, change_id)
-    if str(record.get(field) or ""):
-        return
-    stamp = now().astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S")
-    update_fields(client, change_id, {field: stamp})
+    stamp_actual(client, change_id, field)

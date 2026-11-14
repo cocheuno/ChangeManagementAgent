@@ -36,7 +36,7 @@ from cm_agents.data.queries import (
     USER,
     counts_in_metrics,
 )
-from cm_agents.deploy import simulator
+from cm_agents.deploy.simulator import describe_state, reset_state
 from cm_agents.servicenow.client import ServiceNowClient, ServiceNowError
 from cm_agents.settings import Settings, repo_root
 
@@ -224,7 +224,29 @@ def _delete_change_children(client: ServiceNowClient, change_id: str) -> None:
             _delete_one(client, table, str(child["sys_id"]))
 
 
+def _print_restored_settings(client: ServiceNowClient, manifest: dict[str, Any]) -> None:
+    """Read back the two approved settings after they are restored."""
+    originals = manifest.get("oob_originals") or {}
+    if not isinstance(originals, dict):
+        raise TeardownError("oob_originals is not an object")
+    for key, row in originals.items():
+        if not isinstance(row, dict):
+            raise TeardownError(f"oob original {key} is not an object")
+        table = str(row.get("table") or "")
+        sys_id = str(row.get("sys_id") or "")
+        field = str(row.get("field") or "")
+        if not table or not sys_id or not field:
+            raise TeardownError(f"oob original {key} is incomplete")
+        stored = client.get_record(table, sys_id, fields=[field])
+        actual = stored.get(field)
+        if actual is None:
+            actual = ""
+        print(f"oob {key} field={field} value={actual!r}", flush=True)
+
+
 def teardown(settings: Settings) -> int:
+    print(f"simulator state: {describe_state()}", flush=True)
+    reset_state()
     path = repo_root() / "data" / "synthetic" / "manifest.json"
     manifest = load_manifest(path)
     if manifest is None:
@@ -251,6 +273,8 @@ def teardown(settings: Settings) -> int:
         _delete_synthetic_users(client, user_ids)
         for table, query in SWEEPS_AFTER_USERS:
             print(f"sweep {table}", flush=True)
+            if table == "sys_dictionary":
+                _clear_orphan_dictionary(client)
             _sweep(client, table, query)
         _delete_standard_catalog(client, manifest)
         _delete_recorded(client, manifest)
@@ -263,18 +287,67 @@ def teardown(settings: Settings) -> int:
             restore_oob_originals(client, manifest)
         except OobError as exc:
             raise TeardownError(str(exc)) from None
+        _print_restored_settings(client, manifest)
+        task_count = client.count(
+            "change_task",
+            "change_request.correlation_idSTARTSWITHSYN-",
+        )
+        print(f"change_task on SYN changes={task_count}", flush=True)
+        if task_count:
+            raise TeardownError("change tasks are still present on SYN changes")
         seeded_at = manifest.get("seeded_at")
-        _verify(client, baseline, seeded_at if isinstance(seeded_at, str) and seeded_at else None)
+        later = manifest.get("baseline_later")
+        _verify(
+            client,
+            baseline,
+            seeded_at if isinstance(seeded_at, str) and seeded_at else None,
+            later if isinstance(later, dict) else None,
+        )
         # incident.u_caused_by is a human-made column. Deleting the SYN
         # incidents clears its values. This does not delete the column.
         _require_caused_by_field(client)
     path.unlink()
-    # The simulator describes deployments onto records that no longer exist.
-    sim_path = simulator.default_path()
-    print(f"simulator state before reset: {simulator.summary(sim_path)}", flush=True)
-    simulator.reset(sim_path)
     print("TEARDOWN OK", flush=True)
     return 0
+
+
+def _clear_orphan_dictionary(client: ServiceNowClient) -> None:
+    """Remove a staging column that survives the table drop.
+
+    Deleting ``sys_db_object`` cascades its dictionary rows. A direct delete
+    of ``sys_dictionary`` is ACL 403. The collection ``sys_id`` column can
+    remain after the table is gone. Creating that table again and deleting it
+    removes the leftover column.
+    """
+    for name in (
+        "u_syn_chg_import",
+        "u_syn_inc_import",
+        "u_syn_taskci_import",
+        "u_syn_std_delete",
+    ):
+        if client.count("sys_dictionary", f"name={name}") == 0:
+            continue
+        if client.count("sys_db_object", f"name={name}"):
+            _sweep(client, "sys_db_object", f"name={name}")
+        if client.count("sys_dictionary", f"name={name}") == 0:
+            continue
+        created = client.create_record(
+            "sys_db_object",
+            {
+                "label": "SYN import cleanup",
+                "name": name,
+                "super_class": IMPORT_ROW,
+                "create_access_controls": "false",
+                "create_module": "false",
+                "is_extendable": "false",
+            },
+        )
+        sys_id = str(created.get("sys_id") or "")
+        if not sys_id:
+            raise TeardownError(f"could not rebuild staging table {name}")
+        client.delete_record("sys_db_object", sys_id)
+        if client.count("sys_dictionary", f"name={name}"):
+            raise TeardownError(f"dictionary rows remain for {name}")
 
 
 def _sweep(client: ServiceNowClient, table: str, query: str) -> int:
@@ -730,17 +803,25 @@ def _require_caused_by_field(client: ServiceNowClient) -> None:
 
 
 def baseline_lines(
-    table: str, baseline: int, before_seed: int, after_seed: int
+    table: str,
+    baseline: int,
+    before_seed: int,
+    after_seed: int,
+    already_later: int = 0,
 ) -> tuple[bool, str]:
-    """Pass only when rows created before the seed still match the baseline.
+    """Pass when every baseline row is still present.
 
-    Rows created after the seed, including the daily cert_follow_on_task job,
-    are reported and do not fail the check.
+    ``already_later`` is the count, taken at seed time, of rows whose
+    ``sys_created_on`` was already on or after the seed clock. Demo data uses
+    dates years ahead. Rows created after the seed, including the daily
+    cert_follow_on_task job, are printed and do not fail the check.
     """
-    ok = before_seed == int(baseline)
+    expected_before = int(baseline) - int(already_later)
+    new_rows = after_seed - int(already_later)
+    ok = before_seed == expected_before and new_rows >= 0
     text = (
         f"{table} before_seed={before_seed} baseline={baseline} "
-        f"created_after_seed={after_seed}"
+        f"already_later={already_later} created_after_seed={new_rows}"
     )
     return ok, text
 
@@ -749,6 +830,7 @@ def _verify(
     client: ServiceNowClient,
     baseline: dict[str, object],
     seeded_at: str | None = None,
+    baseline_later: dict[str, object] | None = None,
 ) -> None:
     failed = False
     for table, query in SYN_LEFT:
@@ -762,16 +844,19 @@ def _verify(
         print(f"{table} syn={count}", flush=True)
         failed = failed or count != 0
     if not seeded_at:
-        print("seeded_at is missing; comparing totals", flush=True)
+        # The Phase 1 manifest did not record seeded_at. Totals have moved
+        # because the PDI gained rows that are not SYN. Those rows stay.
+        print("seeded_at is missing; totals are printed and do not fail the check", flush=True)
         for table, expected in baseline.items():
             actual = client.count(str(table))
             print(f"{table} total={actual} baseline={expected}", flush=True)
-            failed = failed or actual != int(expected)
     else:
+        recorded_later = baseline_later or {}
         for table, expected in baseline.items():
             before = client.count(str(table), f"sys_created_on<{seeded_at}")
             after = client.count(str(table), f"sys_created_on>={seeded_at}")
-            ok, text = baseline_lines(str(table), int(expected), before, after)
+            already = int(recorded_later.get(table) or 0)
+            ok, text = baseline_lines(str(table), int(expected), before, after, already)
             print(text, flush=True)
             failed = failed or not ok
     if failed:

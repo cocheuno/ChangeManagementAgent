@@ -48,6 +48,7 @@ def new_manifest(
     baseline: dict[str, int],
     anchor: str,
     seeded_at: str | None = None,
+    baseline_later: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "seed": seed,
@@ -63,6 +64,8 @@ def new_manifest(
     }
     if seeded_at:
         payload["seeded_at"] = seeded_at
+    if baseline_later:
+        payload["baseline_later"] = baseline_later
     return payload
 
 

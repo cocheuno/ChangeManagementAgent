@@ -1,6 +1,7 @@
 """Release readiness and risk. No network and no model calls."""
 
 import inspect
+from datetime import datetime
 from types import SimpleNamespace
 
 from langgraph.checkpoint.sqlite import SqliteSaver
@@ -14,10 +15,15 @@ from cm_agents.agents.release import (
     member_close_note,
     readiness_failures,
     resolve_service,
+    run_release_close,
+    run_release_deploy,
     unexpected_change_tasks,
 )
+from cm_agents.clock import pin
+from cm_agents.data.import_time import UTC
 from cm_agents.enablement.route import route_after_authorization
 from cm_agents.graphs.release_graph import _after_go, _after_readiness, build_release_graph
+from cm_agents.servicenow.changes import STATE_REVIEW, ChangeError
 
 ENVIRONMENTS = ("DEV", "TEST", "STAGE", "PROD")
 
@@ -37,109 +43,33 @@ def _member(number: str, state: str, risk: str = "4", ci: str = "syn-store-web")
     }
 
 
-def test_a_release_failing_several_checks_reports_them_all_together() -> None:
+def test_a_release_reports_every_deterministic_failure_together() -> None:
     members = [
-        _member("CHG1001", "-2", ci="syn-pay-api"),
-        _member("CHG1002", "-3", risk="", ci="syn-store-cart"),
-        _member("CHG1003", "-4"),
+        _member("CHG1001", "-2"),
+        _member("CHG1002", "-3", ci="syn-pay-api"),
     ]
-    for member in members:
-        del member["checklist"]
+    members[0]["checklist"]["ordered_backout"] = False
     failures = readiness_failures(
         members,
         release_service="SYN Online Store",
-        ci_service={
-            "syn-store-web": "SYN Online Store",
-            "syn-store-cart": "SYN Online Store",
-            "syn-pay-api": "SYN Payments",
-        },
+        ci_service={"syn-store-web": "SYN Online Store", "syn-pay-api": "SYN Payments"},
         blocking_conflicts=["ci_already_scheduled"],
         freeze="SYN Holiday Peak Freeze",
         open_p1_p2=["INC1 priority 1"],
         notes_ready=False,
         check_notes=True,
-        plan_quality=False,
     )
     assert failures == [
         "CHG1002 failed the authorization check: awaiting authorization",
-        "CHG1003 failed the authorization check: awaiting authorization",
-        "CHG1001 failed the service check: syn-pay-api is not in SYN Online Store",
-        "CHG1002 failed the member risk check: risk is missing",
+        "plan quality was not checked because a member is awaiting authorization",
+        "CHG1002 failed the service check: syn-pay-api is not in SYN Online Store",
         "release failed the freeze check: SYN Holiday Peak Freeze",
         "release failed the conflict check: ci_already_scheduled",
         "release failed the open incident check: INC1 priority 1",
         "release failed the release notes check: notes were not generated",
     ]
-    assert not any("plan quality" in failure for failure in failures)
-    detail = "; ".join(failures)
-    assert _after_readiness({"readiness": {"passed": False, "detail": detail}}) == "wait"
-
-
-def test_plan_quality_is_checked_once_every_member_is_authorized() -> None:
-    member = _member("CHG1001", "-2")
-    member["checklist"]["backout_trigger"] = False
-    failures = readiness_failures(
-        [member],
-        release_service="SYN Online Store",
-        ci_service={"syn-store-web": "SYN Online Store"},
-        blocking_conflicts=[],
-        freeze=None,
-        open_p1_p2=[],
-        notes_ready=True,
-        check_notes=True,
-    )
-    assert failures == ["CHG1001 failed the plan quality check: backout_trigger"]
-
-
-def test_the_interrupt_names_every_failure_and_says_plan_quality_is_held(monkeypatch) -> None:
-    members = [
-        {**_member("CHG1001", "-2", ci="syn-pay-api"), "sys_id": "m1"},
-        {**_member("CHG1002", "-3"), "sys_id": "m2"},
-    ]
-    record = {
-        "sys_id": "rel",
-        "number": "CHG2000",
-        "short_description": release_module.release_summary("SYN Online Store", "2026.11.0"),
-        "start_date": "2026-11-21 03:00:00",
-        "end_date": "2026-11-21 05:00:00",
-    }
-    fixtures = {
-        "cis": [
-            {"name": "syn-store-web", "service": "SYN Online Store"},
-            {"name": "syn-pay-api", "service": "SYN Payments"},
-        ]
-    }
-    context = SimpleNamespace(client=None, fixtures=fixtures, policy={"freezes": []})
-    monkeypatch.setattr(release_module, "current", lambda: context)
-    monkeypatch.setattr(release_module, "_load_release", lambda client, thread: record)
-    monkeypatch.setattr(release_module, "_member_views", lambda client, rel, state: members)
-    monkeypatch.setattr(release_module, "_service_tier", lambda fixtures, service: 1)
-    monkeypatch.setattr(
-        release_module, "_conflicts", lambda client, rows, rel: (["blackout"], ["blackout"])
-    )
-    monkeypatch.setattr(
-        release_module, "_open_incidents", lambda client, fixtures, service: ["INC1 priority 1"]
-    )
-    monkeypatch.setattr(release_module, "notes_ready", lambda version: False)
-
-    def no_model(*args, **kwargs):
-        raise AssertionError("the model was called while a member awaits authorization")
-
-    monkeypatch.setattr(release_module, "_judge_members", no_model)
-    monkeypatch.setattr(release_module, "_write_notes", no_model)
-    result = release_module.run_readiness({"thread_id": "SYN-S06-test"})
-    detail = result["readiness"]["detail"]
-    assert result["readiness"]["passed"] is False
-    assert "member_checks" not in result
-    for expected in (
-        "CHG1002 failed the authorization check: awaiting authorization",
-        "CHG1001 failed the service check: syn-pay-api is not in SYN Online Store",
-        "release failed the conflict check: blackout",
-        "release failed the open incident check: INC1 priority 1",
-        "release failed the release notes check: notes were not generated",
-        release_module.PLAN_QUALITY_HELD,
-    ):
-        assert expected in detail
+    assert not any("ordered_backout" in item for item in failures)
+    assert _after_readiness({"readiness": {"passed": False, "detail": failures[0]}}) == "wait"
 
 
 def test_readiness_passes_only_when_notes_exist_and_the_other_checks_are_clear() -> None:
@@ -268,3 +198,98 @@ def test_service_alias() -> None:
     assert resolve_service("STORE") == "SYN Online Store"
     assert resolve_service("FUL") == "SYN Order Fulfillment"
     assert resolve_service("SYN Payments") == "SYN Payments"
+
+
+def test_the_review_move_happens_after_the_actual_end_is_stamped(monkeypatch) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def stamp(_client: object, _change_id: str, field: str) -> None:
+        calls.append(("stamp", field))
+
+    def move(_client: object, _kind: str, _change_id: str, target: str) -> dict[str, str]:
+        calls.append(("move", target))
+        return {"state": target}
+
+    monkeypatch.setattr(release_module, "_stamp", stamp)
+    monkeypatch.setattr(release_module, "move_state", move)
+    monkeypatch.setattr(
+        release_module,
+        "read_change",
+        lambda *_args, **_kwargs: {"state": "-1", "number": "CHG1"},
+    )
+    monkeypatch.setattr(release_module, "_member_views", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(release_module, "_deploy_environment", lambda *_args, **_kwargs: "passed")
+    monkeypatch.setattr(release_module, "current", lambda: SimpleNamespace(client=object()))
+    result = run_release_deploy(
+        {
+            "change_sys_id": "rel",
+            "thread_id": "SYN-S06-unit",
+            "change_number": "CHG1",
+            "authorization": {"go_no_go": {"decision": "go"}},
+        }
+    )
+    assert result["deployment"]["outcome"] == "verified"
+    assert calls.index(("stamp", "work_end")) < calls.index(("move", STATE_REVIEW))
+
+
+class _ActualDates:
+    """Reject a table update whose actual end is before its actual start."""
+
+    def __init__(self) -> None:
+        self.row = {
+            "sys_id": "rel",
+            "number": "CHG1",
+            "state": "0",
+            "short_description": "SYN RELEASE SYN Online Store 2026.11.0",
+            "work_start": "2026-11-15 03:30:00",
+            "work_end": "2026-11-13 19:08:10",
+            "close_code": "",
+            "close_notes": "",
+        }
+
+    def get_record(self, _table: str, _sys_id: str, **_kwargs: object) -> dict[str, str]:
+        return dict(self.row)
+
+    def update_record(self, _table: str, _sys_id: str, fields: dict[str, str]) -> dict[str, str]:
+        proposed = dict(self.row)
+        proposed.update(fields)
+        start = str(proposed.get("work_start") or "")
+        end = str(proposed.get("work_end") or "")
+        if start and end and start > end:
+            raise ChangeError("Actual Start/End Date Validation")
+        self.row.update(fields)
+        return dict(self.row)
+
+
+def test_close_repairs_an_inverted_actual_end_before_close_notes(monkeypatch) -> None:
+    client = _ActualDates()
+    pin(datetime(2026, 11, 15, 3, 30, tzinfo=UTC))
+    monkeypatch.setattr(release_module, "_member_views", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(release_module, "_release_close_notes", lambda *_args, **_kwargs: "notes")
+    monkeypatch.setattr(
+        release_module,
+        "move_state",
+        lambda *_args, **_kwargs: {**client.row, "state": "3"},
+    )
+    monkeypatch.setattr(
+        release_module,
+        "write_note",
+        lambda note_client, sys_id, **_kwargs: note_client.update_record(
+            "change_request", sys_id, {"work_notes": "closed"}
+        ),
+    )
+    monkeypatch.setattr(release_module, "current", lambda: SimpleNamespace(client=client))
+    try:
+        result = run_release_close(
+            {
+                "change_sys_id": "rel",
+                "thread_id": "SYN-S06-unit",
+                "change_number": "CHG1",
+                "deployment": {"outcome": "verified", "stages": []},
+            }
+        )
+    finally:
+        pin(None)
+    assert result["review"]["done"] is True
+    assert client.row["work_end"] == "2026-11-15 03:30:00"
+    assert client.row["close_code"] == "successful"

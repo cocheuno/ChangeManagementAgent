@@ -93,6 +93,18 @@ class ServiceNowClient:
             try:
                 response = self._http.request(method, path, params=params, json=json)
             except httpx.HTTPError:
+                # A dropped GET did not change the instance. A dropped write
+                # may have committed, so only a read is tried again.
+                if method == "GET" and attempt < self._max_retries:
+                    delay = backoff_seconds(attempt)
+                    logger.info(
+                        "%s %s failed before a response; retrying in %s seconds",
+                        method,
+                        path,
+                        delay,
+                    )
+                    self._sleep(delay)
+                    continue
                 logger.error("%s %s failed before a response", method, path)
                 raise ServiceNowError(f"{method} {path} failed before a response") from None
             last_response = response

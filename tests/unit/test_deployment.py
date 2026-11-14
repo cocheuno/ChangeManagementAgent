@@ -8,6 +8,7 @@ from cm_agents.agents.deployment import _precondition, run_deployment
 from cm_agents.clock import pin
 from cm_agents.data.import_time import UTC
 from cm_agents.deploy.simulator import RedeployBlocked
+from cm_agents.servicenow.changes import stamp_actual
 
 SATURDAY_START = "2026-11-08 03:00:00"
 SATURDAY_END = "2026-11-08 05:00:00"
@@ -109,6 +110,7 @@ def test_a_prod_failure_is_not_retried(monkeypatch, tmp_path) -> None:
         calls["rollback"] += 1
         raise AssertionError("rollback ran after a blocked redeploy")
 
+    monkeypatch.setattr("cm_agents.agents.deployment.stamp_actual", lambda *_args, **_kwargs: None)
     monkeypatch.setattr("cm_agents.agents.deployment.run_deploy", deploy)
     monkeypatch.setattr("cm_agents.agents.deployment.run_rollback", rollback)
     monkeypatch.setattr("cm_agents.agents.deployment.default_path", lambda: tmp_path / "sim.json")
@@ -122,10 +124,6 @@ def test_a_prod_failure_is_not_retried(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(
         "cm_agents.agents.deployment.move_state",
         lambda *_args, **_kwargs: {"state": "-1"},
-    )
-    monkeypatch.setattr(
-        "cm_agents.agents.deployment.update_fields",
-        lambda *_args, **_kwargs: {},
     )
     monkeypatch.setattr(
         "cm_agents.agents.deployment.ensure_change_task",
@@ -161,6 +159,64 @@ def test_a_prod_failure_is_not_retried(monkeypatch, tmp_path) -> None:
     assert calls["rollback"] == 0
     assert result["deployment"]["outcome"] == "blocked"
     assert "recorded failure" in result["error"]
+
+
+class _Dates:
+    def __init__(self, work_start: str = "", work_end: str = "") -> None:
+        self.row = {"sys_id": "chg", "work_start": work_start, "work_end": work_end}
+        self.writes: list[dict[str, str]] = []
+
+    def get_record(self, table: str, sys_id: str, **_kwargs: object) -> dict[str, str]:
+        return dict(self.row)
+
+    def update_record(self, table: str, sys_id: str, fields: dict[str, str]) -> dict[str, str]:
+        self.writes.append(dict(fields))
+        self.row.update(fields)
+        return dict(self.row)
+
+
+def test_work_end_moves_a_later_platform_start_with_it() -> None:
+    pin(datetime(2026, 11, 8, 3, 0, tzinfo=UTC))
+    client = _Dates(work_start="2026-11-13 18:37:11")
+    try:
+        stamp_actual(client, "chg", "work_end")
+    finally:
+        pin(None)
+    assert client.writes == [
+        {"work_start": "2026-11-08 03:00:00", "work_end": "2026-11-08 03:00:00"}
+    ]
+
+
+def test_work_start_replaces_the_instance_clock() -> None:
+    pin(datetime(2026, 11, 8, 3, 0, tzinfo=UTC))
+    client = _Dates(work_start="2026-11-13 18:37:11")
+    try:
+        stamp_actual(client, "chg", "work_start")
+    finally:
+        pin(None)
+    assert client.writes == [{"work_start": "2026-11-08 03:00:00"}]
+
+
+def test_work_end_catches_a_platform_end_that_is_earlier_than_the_start() -> None:
+    pin(datetime(2026, 11, 15, 3, 30, tzinfo=UTC))
+    client = _Dates(work_start="2026-11-15 03:30:00", work_end="2026-11-13 19:08:10")
+    try:
+        stamp_actual(client, "chg", "work_end")
+    finally:
+        pin(None)
+    assert client.writes == [{"work_end": "2026-11-15 03:30:00"}]
+    assert client.row["work_start"] <= client.row["work_end"]
+
+
+def test_an_actual_stamp_that_already_matches_is_left_alone() -> None:
+    pin(datetime(2026, 11, 8, 3, 0, tzinfo=UTC))
+    client = _Dates(work_start="2026-11-08 03:00:00")
+    try:
+        stamp_actual(client, "chg", "work_start")
+        stamp_actual(client, "chg", "work_end")
+    finally:
+        pin(None)
+    assert client.writes == [{"work_end": "2026-11-08 03:00:00"}]
 
 
 def _state(change_type: str, *, decision: str = "", tier: int = 3) -> dict[str, Any]:

@@ -77,6 +77,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     run_release.add_argument("name", nargs="*")
     run_release.add_argument("--thread", default=None)
+    scenario = sub.add_parser("scenario", help="Run a seeded scenario test")
+    scenario_sub = scenario.add_subparsers(dest="scenario_command", required=True)
+    scenario_run = scenario_sub.add_parser("run", help="Run S01 through S10, or all")
+    scenario_run.add_argument("name", help="S01 through S10, or all")
     report = sub.add_parser("report", help="Write a report from ServiceNow")
     report_sub = report.add_subparsers(dest="report_command", required=True)
     metrics_report = report_sub.add_parser("metrics", help="§8.4 metrics for an explicit period")
@@ -90,7 +94,7 @@ def main(argv: list[str] | None = None) -> int:
         print(str(exc), file=sys.stderr)
         return 2
     configure_logging(settings.secret_values())
-    if args.command in {"seed", "teardown"}:
+    if args.command in {"seed", "teardown", "scenario"}:
         configure_logging(settings.secret_values(), level=logging.WARNING)
     if args.command == "doctor":
         report = run_doctor(settings)
@@ -151,6 +155,16 @@ def main(argv: list[str] | None = None) -> int:
         return _release(settings, args)
     if args.command == "report":
         return _report(settings, args)
+    if args.command == "scenario":
+        from cm_agents.scenarios import ScenarioError, run_scenarios
+
+        if args.scenario_command != "run":
+            return 2
+        try:
+            return run_scenarios(settings, args.name)
+        except ScenarioError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
     return 2
 
 
