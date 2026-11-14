@@ -254,9 +254,16 @@ def _prepare_manifest(
     if client.count("change_request", CHANGE):
         raise SeedError("teardown first")
     baseline = {table: client.count(table) for table in BASELINE_TABLES}
-    # One second after the instance clock so every row in the counts is older.
+    # One second after the instance clock so a row created now is older.
+    # Demo rows can still carry a future sys_created_on. Record those counts
+    # so teardown does not treat them as rows the seed deleted.
     seeded_at = (client.server_time() + timedelta(seconds=1)).strftime("%Y-%m-%d %H:%M:%S")
-    manifest = new_manifest(seed, baseline, anchor, seeded_at=seeded_at)
+    baseline_later = {
+        table: client.count(table, f"sys_created_on>={seeded_at}") for table in BASELINE_TABLES
+    }
+    manifest = new_manifest(
+        seed, baseline, anchor, seeded_at=seeded_at, baseline_later=baseline_later
+    )
     save_manifest(path, manifest)
     return manifest
 
@@ -580,24 +587,40 @@ def _ensure_span(
         limit=1,
     )
     if rows:
-        current = rows[0]
-        if _span_matches(current, body):
-            return
-        client.update_record("cmn_schedule_span", str(current["sys_id"]), body)
-        stored = client.get_record(
-            "cmn_schedule_span", str(current["sys_id"]), fields=list(body.keys())
-        )
+        sys_id = str(rows[0]["sys_id"])
+        if not _span_matches(rows[0], body):
+            _clear_span_defaults(client, sys_id, body, span["name"])
+    else:
+        created = client.create_record("cmn_schedule_span", body)
+        sys_id = str(created.get("sys_id") or "")
+        if not sys_id:
+            raise SeedError(f"schedule span was not created: {span['name']}")
+        stored = client.get_record("cmn_schedule_span", sys_id, fields=list(body.keys()))
         if not _span_matches(stored, body):
-            raise SeedError(f"schedule span did not keep the Eastern wall clock: {span['name']}")
-        return
-    created = client.create_record("cmn_schedule_span", body)
-    stored = client.get_record(
-        "cmn_schedule_span", str(created["sys_id"]), fields=list(body.keys())
-    )
-    if not _span_matches(stored, body):
-        raise SeedError(f"schedule span did not keep the Eastern wall clock: {span['name']}")
-    add_record(manifest, "cmn_schedule_span", str(created["sys_id"]), span["name"])
+            _clear_span_defaults(client, sys_id, body, span["name"])
+    add_record(manifest, "cmn_schedule_span", sys_id, span["name"])
     save_manifest(path, manifest)
+
+
+def _clear_span_defaults(
+    client: ServiceNowClient,
+    sys_id: str,
+    body: dict[str, str],
+    name: str,
+) -> None:
+    """Clear the float fields an insert fills from the dictionary.
+
+    Posting an empty ``float_day``, ``float_week``, or ``yearly_type`` on
+    insert stores the dictionary defaults ``1``, ``1``, and ``doy``. The
+    out-of-box weekly span keeps those three empty. The same values on an
+    update stay empty, and the Eastern wall clock stays as posted.
+    """
+    client.update_record("cmn_schedule_span", sys_id, body)
+    stored = client.get_record("cmn_schedule_span", sys_id, fields=list(body.keys()))
+    if _span_matches(stored, body):
+        return
+    gaps = ", ".join(_span_gaps(stored, body))
+    raise SeedError(f"schedule span did not keep the Eastern wall clock: {name} ({gaps})")
 
 
 def _ensure_conflict_uses_ci_schedule(
@@ -675,15 +698,20 @@ def _ensure_conflict_uses_ci_schedule(
 
 
 def _span_matches(stored: dict[str, Any], body: dict[str, str]) -> bool:
+    return not _span_gaps(stored, body)
+
+
+def _span_gaps(stored: dict[str, Any], body: dict[str, str]) -> list[str]:
+    gaps: list[str] = []
     for key, expected in body.items():
         actual = stored.get(key)
         if key in {"start_date_time", "end_date_time"}:
             if _normalize_span(actual) != expected:
-                return False
+                gaps.append(key)
             continue
         if not values_match(expected, actual):
-            return False
-    return True
+            gaps.append(key)
+    return gaps
 
 
 def _normalize_span(value: object) -> str:

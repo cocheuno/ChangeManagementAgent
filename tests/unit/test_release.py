@@ -1,6 +1,8 @@
 """Release readiness and risk. No network and no model calls."""
 
 import inspect
+from datetime import datetime
+from types import SimpleNamespace
 
 from langgraph.checkpoint.sqlite import SqliteSaver
 
@@ -13,10 +15,15 @@ from cm_agents.agents.release import (
     member_close_note,
     readiness_failures,
     resolve_service,
+    run_release_close,
+    run_release_deploy,
     unexpected_change_tasks,
 )
+from cm_agents.clock import pin
+from cm_agents.data.import_time import UTC
 from cm_agents.enablement.route import route_after_authorization
 from cm_agents.graphs.release_graph import _after_go, _after_readiness, build_release_graph
+from cm_agents.servicenow.changes import STATE_REVIEW, ChangeError
 
 ENVIRONMENTS = ("DEV", "TEST", "STAGE", "PROD")
 
@@ -191,3 +198,98 @@ def test_service_alias() -> None:
     assert resolve_service("STORE") == "SYN Online Store"
     assert resolve_service("FUL") == "SYN Order Fulfillment"
     assert resolve_service("SYN Payments") == "SYN Payments"
+
+
+def test_the_review_move_happens_after_the_actual_end_is_stamped(monkeypatch) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def stamp(_client: object, _change_id: str, field: str) -> None:
+        calls.append(("stamp", field))
+
+    def move(_client: object, _kind: str, _change_id: str, target: str) -> dict[str, str]:
+        calls.append(("move", target))
+        return {"state": target}
+
+    monkeypatch.setattr(release_module, "_stamp", stamp)
+    monkeypatch.setattr(release_module, "move_state", move)
+    monkeypatch.setattr(
+        release_module,
+        "read_change",
+        lambda *_args, **_kwargs: {"state": "-1", "number": "CHG1"},
+    )
+    monkeypatch.setattr(release_module, "_member_views", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(release_module, "_deploy_environment", lambda *_args, **_kwargs: "passed")
+    monkeypatch.setattr(release_module, "current", lambda: SimpleNamespace(client=object()))
+    result = run_release_deploy(
+        {
+            "change_sys_id": "rel",
+            "thread_id": "SYN-S06-unit",
+            "change_number": "CHG1",
+            "authorization": {"go_no_go": {"decision": "go"}},
+        }
+    )
+    assert result["deployment"]["outcome"] == "verified"
+    assert calls.index(("stamp", "work_end")) < calls.index(("move", STATE_REVIEW))
+
+
+class _ActualDates:
+    """Reject a table update whose actual end is before its actual start."""
+
+    def __init__(self) -> None:
+        self.row = {
+            "sys_id": "rel",
+            "number": "CHG1",
+            "state": "0",
+            "short_description": "SYN RELEASE SYN Online Store 2026.11.0",
+            "work_start": "2026-11-15 03:30:00",
+            "work_end": "2026-11-13 19:08:10",
+            "close_code": "",
+            "close_notes": "",
+        }
+
+    def get_record(self, _table: str, _sys_id: str, **_kwargs: object) -> dict[str, str]:
+        return dict(self.row)
+
+    def update_record(self, _table: str, _sys_id: str, fields: dict[str, str]) -> dict[str, str]:
+        proposed = dict(self.row)
+        proposed.update(fields)
+        start = str(proposed.get("work_start") or "")
+        end = str(proposed.get("work_end") or "")
+        if start and end and start > end:
+            raise ChangeError("Actual Start/End Date Validation")
+        self.row.update(fields)
+        return dict(self.row)
+
+
+def test_close_repairs_an_inverted_actual_end_before_close_notes(monkeypatch) -> None:
+    client = _ActualDates()
+    pin(datetime(2026, 11, 15, 3, 30, tzinfo=UTC))
+    monkeypatch.setattr(release_module, "_member_views", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(release_module, "_release_close_notes", lambda *_args, **_kwargs: "notes")
+    monkeypatch.setattr(
+        release_module,
+        "move_state",
+        lambda *_args, **_kwargs: {**client.row, "state": "3"},
+    )
+    monkeypatch.setattr(
+        release_module,
+        "write_note",
+        lambda note_client, sys_id, **_kwargs: note_client.update_record(
+            "change_request", sys_id, {"work_notes": "closed"}
+        ),
+    )
+    monkeypatch.setattr(release_module, "current", lambda: SimpleNamespace(client=client))
+    try:
+        result = run_release_close(
+            {
+                "change_sys_id": "rel",
+                "thread_id": "SYN-S06-unit",
+                "change_number": "CHG1",
+                "deployment": {"outcome": "verified", "stages": []},
+            }
+        )
+    finally:
+        pin(None)
+    assert result["review"]["done"] is True
+    assert client.row["work_end"] == "2026-11-15 03:30:00"
+    assert client.row["close_code"] == "successful"

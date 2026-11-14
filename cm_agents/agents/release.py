@@ -23,7 +23,7 @@ from cm_agents.agents.context import current
 from cm_agents.agents.risk import judge_plans
 from cm_agents.audit import record_audit
 from cm_agents.clock import now
-from cm_agents.data.import_time import UTC, parse_utc
+from cm_agents.data.import_time import parse_utc
 from cm_agents.deploy.simulator import default_path, passes_thresholds, run_deploy, run_rollback
 from cm_agents.enablement.guard import blocks_schedule
 from cm_agents.enablement.risk_score import CHECKLIST, RISK_VALUE, impact_for_tier
@@ -45,6 +45,7 @@ from cm_agents.servicenow.changes import (
     read_change,
     remember_change,
     service_ci,
+    stamp_actual,
     update_fields,
     write_dates,
     write_note,
@@ -412,6 +413,10 @@ def run_release_deploy(state: dict[str, Any]) -> dict[str, Any]:
                     "change_state": STATE_IMPLEMENT,
                 },
             }
+    # The model writes the instance clock into an empty work_end when the
+    # state becomes Review. Stamp the scenario clock first so that rule does
+    # not leave the actual end before a future actual start.
+    _stamp(ctx.client, state["change_sys_id"], "work_end")
     record = move_state(ctx.client, "normal", state["change_sys_id"], STATE_REVIEW)
     return {
         "deployment": {
@@ -440,13 +445,15 @@ def run_release_close(state: dict[str, Any]) -> dict[str, Any]:
     summary = str(record.get("short_description") or "")
     for member in members:
         _close_member(ctx.client, member, number, summary)
+    # A Review transition that already stored the instance clock has an actual
+    # end before a future scenario start. Repair that pair before close notes.
+    _stamp(ctx.client, state["change_sys_id"], "work_end")
     notes = _release_close_notes(state, number)
     update_fields(
         ctx.client,
         state["change_sys_id"],
         {"close_code": "successful", "close_notes": notes},
     )
-    _stamp(ctx.client, state["change_sys_id"], "work_end")
     closed = move_state(ctx.client, "normal", state["change_sys_id"], STATE_CLOSED)
     if str(closed.get("state") or "") != STATE_CLOSED:
         raise ChangeError(f"release state is {closed.get('state')} after a move to Closed")
@@ -906,8 +913,4 @@ def _release_close_notes(state: dict[str, Any], number: str) -> str:
 
 
 def _stamp(client: ServiceNowClient, change_id: str, field: str) -> None:
-    record = read_change(client, change_id)
-    if str(record.get(field) or ""):
-        return
-    stamp = now().astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S")
-    update_fields(client, change_id, {field: stamp})
+    stamp_actual(client, change_id, field)

@@ -98,6 +98,30 @@ def test_exhausted_429_raises_after_three_retries() -> None:
 
 
 @respx.mock
+def test_a_dropped_get_is_retried() -> None:
+    delays: list[float] = []
+    route = respx.get(url__regex=r".*/api/now/table/sys_user").mock(
+        side_effect=[
+            httpx.ConnectError("reset"),
+            httpx.Response(200, json={"result": []}),
+        ]
+    )
+    assert _client(sleep=delays.append).get_table("sys_user") == []
+    assert route.call_count == 2
+    assert delays == [backoff_seconds(0)]
+
+
+@respx.mock
+def test_a_dropped_post_is_not_retried() -> None:
+    route = respx.post(url__regex=r".*/api/now/table/change_request").mock(
+        side_effect=httpx.ConnectError("reset")
+    )
+    with pytest.raises(ServiceNowError, match="failed before a response"):
+        _client().create_record("change_request", {"short_description": "x"})
+    assert route.call_count == 1
+
+
+@respx.mock
 def test_client_error_is_not_retried() -> None:
     delays: list[float] = []
     route = respx.get(url__regex=r".*/api/now/table/sys_user").mock(
