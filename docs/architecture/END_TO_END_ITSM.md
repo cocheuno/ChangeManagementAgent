@@ -78,7 +78,7 @@ Repositories read on 2026-11-14: `cocheuno/itscm-451z-agent` (`c5cc185`), `evebr
 
 | Repository | Role | Changes |
 |---|---|---|
-| `cocheuno/itsm-e2e-agents` (new; name to confirm) | End-to-end case graph, authority agents, contracts, shared seed and teardown, scenarios, metrics | All new |
+| `cocheuno/itsm-e2e-agents` (new) | End-to-end case graph, authority agents, contracts, shared seed and teardown, scenarios, metrics | All new |
 | `cocheuno/ChangeManagementAgent` | Change, release, deployment | None to the graphs or agents. Possibly small additions found in Phase 0 |
 | `cocheuno/itscm-451z-agent`, branch `e2e-incident` | Incident tools and the new incident workflow | Workflow module, packaging metadata, ADRs |
 | `cocheuno/pm-agent` (fork of `evebrin/pm-agent`) | Detection, RCA, known error, closure | Packaging metadata; gates take a decision function; change step stops at the draft |
@@ -449,8 +449,10 @@ Each phase ends with a gate of commands and expected results, and leaves each re
 | 7 | The fork drifts from the student's repository | The comparison becomes unfair | Keep fork changes minimal and listed; rebase on the original |
 | 8 | Course rules in the incident repository | Work may be refused by CI or policy there | Follow them: pull request, ADRs, eval thresholds |
 
-**Open questions for the owner:**
+**Answered by the owner on 2026-11-16:**
 
-1. The orchestrator repository's name, and who creates it and the fork (this design assumes `cocheuno/itsm-e2e-agents` and `cocheuno/pm-agent`).
-2. Whether the Scripted REST endpoint is acceptable if Phase 0 shows problem states cannot be moved otherwise.
-3. Whether the student receives this document, or only the design prompt, so the two results can be compared fairly.
+1. The orchestrator repository is `cocheuno/itsm-e2e-agents`, and the fork is `cocheuno/pm-agent`. Both exist.
+2. The Scripted REST endpoint is acceptable if Phase 0 proves problem states cannot be moved otherwise.
+3. The student receives neither this document nor the design prompt.
+
+The build prompt for this design is [`prompts/grok-build-end-to-end-itsm-agents.md`](../../prompts/grok-build-end-to-end-itsm-agents.md).

@@ -9,8 +9,11 @@ These are all the prompts used to build this project's agents with Grok Build. T
 | [`grok-build-session-messages.md`](grok-build-session-messages.md) | Every message sent to Grok Build, in order, with its reasons, plus a review checklist and reply and resume templates | During the build, at each phase boundary and after switching PCs |
 | [`problem-management-primer-prompt.md`](problem-management-primer-prompt.md) | A prompt that has an AI assistant write a student primer on Problem Management, agents and agentic workflow, and analytics | Before the student starts the Problem Management project |
 | [`end-to-end-itsm-architecture-design-prompt.md`](end-to-end-itsm-architecture-design-prompt.md) | A prompt that has an AI architect design how the Incident, Problem and Change agent sets join into one fully automated workflow, including the repository strategy and agent-made approvals. It names all three repositories and the conflicts already found between them | Before combining the three agent repositories; its output feeds the next phased build prompt |
+| [`grok-build-end-to-end-itsm-agents.md`](grok-build-end-to-end-itsm-agents.md) | The **master prompt** for the end-to-end build: working rules, environment, and seven phases with gates. It follows the design in `docs/architecture/END_TO_END_ITSM.md` | Given to Grok Build in the `itsm-e2e-agents` repository and reread in every new session |
+| [`grok-build-e2e-session-messages.md`](grok-build-e2e-session-messages.md) | The folder setup and Message 1 for the end-to-end build | Before and during the end-to-end build |
 
 Related:
+- [`docs/architecture/END_TO_END_ITSM.md`](../docs/architecture/END_TO_END_ITSM.md): the end-to-end design that the design prompt produced.
 - [`docs/setup/PDI_AND_WORKSTATION_SETUP.md`](../docs/setup/PDI_AND_WORKSTATION_SETUP.md): the exact PDI, xAI and Windows setup, including every error met and how it was fixed. Do this before sending any prompt.
 - [`docs/phase-reports/`](../docs/phase-reports/): Grok Build's report for each phase.
 - On the `grok-build` branch, `docs/DISCOVERY.md` and `docs/ASSUMPTIONS.md`: what Phase 0 verified on the PDI.
